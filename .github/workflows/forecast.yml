@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -41,28 +42,76 @@ jobs:
       - name: Run forecast
         run: python -u bitcoin_forecast.py
 
-      - name: Upload outputs (CSVs/PNGs/JSON)
+      # ---- turn metrics.json into LaTeX defs (report/inputs.tex)
+      - name: Create inputs.tex from metrics.json
+        run: |
+          python - << 'PY'
+          import json, os
+          p = "report/outputs/metrics.json"
+          if not os.path.exists(p):
+              raise SystemExit(f"Missing {p}. Did the python step run?")
+          with open(p) as f:
+              m = json.load(f)
+
+          def usd(x): return f"{x:,.2f}"
+
+          lines = [
+            f"\\def\\reportDate{{{m['reportDate']}}}",
+            f"\\def\\spotUSD{{{usd(m['spotUSD'])}}}",
+            f"\\def\\probUpOneDay{{{m['probUpOneDay']}}}",
+            f"\\def\\sigmaOneDay{{{m['sigmaOneDay']}}}",
+            f"\\def\\pOneMed{{{usd(m['p1']['med'])}}}",
+            f"\\def\\pOneP10{{{usd(m['p1']['p10'])}}}",
+            f"\\def\\pOneP90{{{usd(m['p1']['p90'])}}}",
+            f"\\def\\pSevenMed{{{usd(m['p7']['med'])}}}",
+            f"\\def\\pSevenP10{{{usd(m['p7']['p10'])}}}",
+            f"\\def\\pSevenP90{{{usd(m['p7']['p90'])}}}",
+            f"\\def\\pThirtyMed{{{usd(m['p30']['med'])}}}",
+            f"\\def\\pThirtyP10{{{usd(m['p30']['p10'])}}}",
+            f"\\def\\pThirtyP90{{{usd(m['p30']['p90'])}}}",
+          ]
+          with open("report/inputs.tex", "w") as f:
+              f.write("\n".join(lines) + "\n")
+          print("Wrote report/inputs.tex")
+          PY
+
+      # ---- compile Beamer PDF
+      - name: Compile Beamer PDF
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: main.tex
+          working_directory: report
+          latexmk_use_xelatex: true
+
+      # ---- upload artifacts
+      - name: Upload PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitcoin-forecast-report
+          path: report/main.pdf
+
+      - name: Upload outputs (PNGs/JSON)
         uses: actions/upload-artifact@v4
         with:
           name: btc-forecast-outputs
-          path: outputs/**
+          path: report/outputs/**
 
-           - name: Push to Overleaf (publish report + figures)
+      # ---- OPTIONAL: push to Overleaf if you have a paid Git/Bridge URL
+      - name: Push to Overleaf (publish report + figures)
+        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         run: |
           set -e
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@users.noreply.github.com"
-          # Add the Overleaf remote (stored as a secret)
-          git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
-          # Create a temporary tree with only the report and outputs
+
+          # prepare a clean tree with just the report dir
           rm -rf /tmp/overleaf && mkdir -p /tmp/overleaf
           cp -r report /tmp/overleaf/
-          cp -r outputs /tmp/overleaf/
           cd /tmp/overleaf
+
           git init
           git add -A
           git commit -m "Auto-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
-          # Overleaf’s default branch is usually 'master'
           git branch -M master
           git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
           git push -f overleaf master
