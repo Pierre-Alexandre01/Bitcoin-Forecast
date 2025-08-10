@@ -1,8 +1,12 @@
+yfinance
 pandas
 numpy
+scikit-learn
 matplotlib
-yfinance
-feedparser
-jinja2
+emoji
 nltk
-python-dateutil
+joblib
+requests
+certifi
+feedparser
+gnews
