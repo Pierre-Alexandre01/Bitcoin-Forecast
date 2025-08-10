@@ -3,7 +3,7 @@ name: Daily Bitcoin Forecast
 on:
   schedule:
     - cron: "17 6 * * *"   # runs every day at 06:17 UTC
-  workflow_dispatch:        # allow manual run
+  workflow_dispatch:
   push:
     branches: [ main ]
 
@@ -42,19 +42,17 @@ jobs:
       - name: Run forecast
         run: python -u bitcoin_forecast.py
 
-      # ---- turn metrics.json into LaTeX defs (report/inputs.tex)
+      # Turn metrics.json into LaTeX defs used by the report
       - name: Create inputs.tex from metrics.json
         run: |
           python - << 'PY'
-          import json, os
+          import json, os, sys
           p = "report/outputs/metrics.json"
           if not os.path.exists(p):
-              raise SystemExit(f"Missing {p}. Did the python step run?")
+              sys.exit(f"❌ Missing {p}. Ensure your script writes metrics there.")
           with open(p) as f:
               m = json.load(f)
-
           def usd(x): return f"{x:,.2f}"
-
           lines = [
             f"\\def\\reportDate{{{m['reportDate']}}}",
             f"\\def\\spotUSD{{{usd(m['spotUSD'])}}}",
@@ -72,10 +70,9 @@ jobs:
           ]
           with open("report/inputs.tex", "w") as f:
               f.write("\n".join(lines) + "\n")
-          print("Wrote report/inputs.tex")
+          print("✅ Wrote report/inputs.tex")
           PY
 
-      # ---- compile Beamer PDF
       - name: Compile Beamer PDF
         uses: xu-cheng/latex-action@v3
         with:
@@ -83,7 +80,6 @@ jobs:
           working_directory: report
           latexmk_use_xelatex: true
 
-      # ---- upload artifacts
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
@@ -96,7 +92,13 @@ jobs:
           name: btc-forecast-outputs
           path: report/outputs/**
 
-      # ---- OPTIONAL: push to Overleaf if you have a paid Git/Bridge URL
+      # OPTIONAL: supply token if your OVERLEAF_GIT_URL secret does NOT include it
+      - name: Configure Overleaf credentials
+        if: ${{ secrets.OVERLEAF_GIT_URL != '' && secrets.OVERLEAF_TOKEN != '' }}
+        run: |
+          git config --global credential.helper store
+          printf "https://git:%s@git.overleaf.com\n" "${{ secrets.OVERLEAF_TOKEN }}" > ~/.git-credentials
+
       - name: Push to Overleaf (publish report + figures)
         if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         run: |
@@ -104,7 +106,6 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@users.noreply.github.com"
 
-          # prepare a clean tree with just the report dir
           rm -rf /tmp/overleaf && mkdir -p /tmp/overleaf
           cp -r report /tmp/overleaf/
           cd /tmp/overleaf
