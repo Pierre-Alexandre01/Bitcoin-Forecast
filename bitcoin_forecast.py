@@ -300,33 +300,66 @@ df = pd.concat([df_posts.reset_index(drop=True), df_scores.reset_index(drop=True
 df["date_utc"] = ensure_utc(df["date"])
 
 # =============================================================================
-# 3) DAILY FEATURES — UNCHANGED (plus harmless extras you can ignore)
+# 3) DAILY FEATURES — Weighted by source + recency (drop-in)
 # =============================================================================
+# Tunable weights via env (with sensible defaults)
+W_NEWS   = float(os.getenv("SENT_W_NEWS",   "1.0"))
+W_REDDIT = float(os.getenv("SENT_W_REDDIT", "0.7"))
+W_OTHER  = float(os.getenv("SENT_W_OTHER",  "0.9"))
+HL_DAYS  = float(os.getenv("SENT_HALFLIFE_DAYS", "14"))  # half-life (days)
+LAMBDA   = math.log(2) / max(HL_DAYS, 1e-6)              # decay rate
+
 d = df.copy()
 d["date_day"] = d["date_utc"].dt.floor("D")
 d["is_pos"] = (d["sentiment"] == "positive").astype(int)
 d["is_neg"] = (d["sentiment"] == "negative").astype(int)
 
-agg = (
-    d.groupby("date_day")
-     .agg(
-        n=("text", "count"),
-        pos_share=("is_pos", "mean"),
-        neg_share=("is_neg", "mean"),
-        pos_mean=("pos", "mean"),
-        neg_mean=("neg", "mean"),
-     )
-     .reset_index()
-)
-agg["sent_balance"] = agg["pos_share"] - agg["neg_share"]
-df_daily = agg.sort_values("date_day")
+# --- per-row weights: source * time-decay ------------------------------------
+def w_src(cat: str) -> float:
+    c = (cat or "").lower()
+    if c == "news":   return W_NEWS
+    if c == "reddit": return W_REDDIT
+    return W_OTHER
 
-# strictly lag (yesterday only) — model uses these as before
+d["w_src"] = d["source_cat"].astype(str).map(w_src)
+
+now_utc = pd.Timestamp.utcnow().tz_localize("UTC")
+age_days = (now_utc - d["date_utc"]).dt.total_seconds() / 86400.0
+d["w_time"] = np.exp(-LAMBDA * age_days.clip(lower=0))
+d["w"] = d["w_src"] * d["w_time"]
+
+# helper for weighted mean
+def wmean(sub, col):
+    w = sub["w"].to_numpy(dtype=float)
+    x = sub[col].to_numpy(dtype=float)
+    s = np.nansum(w)
+    return np.nan if s <= 0 else float(np.nansum(w * x) / s)
+
+# aggregate to daily with weighted stats
+agg_rows = []
+for day, g in d.groupby("date_day"):
+    row = {
+        "date_day": day,
+        "n": int(len(g)),                    # unweighted count (kept for info)
+        "pos_share": wmean(g, "is_pos"),
+        "neg_share": wmean(g, "is_neg"),
+        "pos_mean":  wmean(g, "pos"),
+        "neg_mean":  wmean(g, "neg"),
+    }
+    # if pos/neg share is nan due to zero total weight, treat as 0 for balance
+    ps = 0.0 if math.isnan(row["pos_share"]) else row["pos_share"]
+    ns = 0.0 if math.isnan(row["neg_share"]) else row["neg_share"]
+    row["sent_balance"] = ps - ns
+    agg_rows.append(row)
+
+df_daily = pd.DataFrame(agg_rows).sort_values("date_day").reset_index(drop=True)
+
+# strictly lag (yesterday only) — same behavior as before
 for c in ["pos_share", "neg_share", "pos_mean", "neg_mean", "sent_balance"]:
-    df_daily[c] = df_daily[c].shift(1)
+    if c in df_daily.columns:
+        df_daily[c] = df_daily[c].shift(1)
 
-# (Optional extras, not used by your model; safe to ignore)
-# Per-category counts (news vs reddit)
+# (Optional extras) Per-category counts (news vs reddit), unchanged
 try:
     cat_counts = (
         d.groupby(["date_day","source_cat"])
@@ -338,6 +371,11 @@ try:
     df_daily = df_daily.merge(cat_counts, on="date_day", how="left")
 except Exception:
     pass
+
+# forward-fill a little to handle sparse days (unchanged)
+for col in ["n", "pos_share", "neg_share", "pos_mean", "neg_mean", "sent_balance"]:
+    if col in df_daily.columns:
+        df_daily[col] = df_daily[col].fillna(method="ffill", limit=3)
 
 # =============================================================================
 # 4) BTC DAILY PRICES — UNCHANGED
