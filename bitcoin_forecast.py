@@ -138,24 +138,56 @@ df_posts = (
       .reset_index(drop=True)
 )
 
-# -------------------- 2) SENTIMENT (VADER) --------------------
-from nltk.sentiment import SentimentIntensityAnalyzer
+# -------------------- 2) SENTIMENT (FinBERT, VADER fallback) --------------------
+USE_FINBERT = os.getenv("USE_FINBERT", "false").lower() == "true"
 
-sia = SentimentIntensityAnalyzer()  # the workflow downloads the lexicon
+def score_vader(texts):
+    from nltk.sentiment import SentimentIntensityAnalyzer
+    sia = SentimentIntensityAnalyzer()
+    rows = []
+    for t in texts:
+        s = sia.polarity_scores(t)
+        lab = "positive" if s["compound"] > 0.05 else "negative" if s["compound"] < -0.05 else "neutral"
+        rows.append({"neg": s["neg"], "neu": s["neu"], "pos": s["pos"], "sentiment": lab})
+    return pd.DataFrame(rows)
+
+def score_finbert(texts):
+    import torch, numpy as np
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    tok = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+    mdl = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+    mdl.eval()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    mdl.to(device)
+    out, labels = [], ["negative","neutral","positive"]
+    with torch.no_grad():
+        for i in range(0, len(texts), 32):
+            batch = texts[i:i+32]
+            enc = tok(batch, padding=True, truncation=True, max_length=128, return_tensors="pt").to(device)
+            logits = mdl(**enc).logits.cpu().numpy()
+            probs = np.exp(logits - logits.max(axis=1, keepdims=True))
+            probs = probs / probs.sum(axis=1, keepdims=True)
+            for p in probs:
+                out.append({
+                    "neg": float(p[0]), "neu": float(p[1]), "pos": float(p[2]),
+                    "sentiment": labels[int(p.argmax())]
+                })
+    return pd.DataFrame(out)
 
 df_posts["text_clean"] = df_posts["text"].astype(str).apply(clean_text)
-rows = []
-for t in df_posts["text_clean"]:
-    sc = sia.polarity_scores(t)
-    if sc["compound"] > 0.05:
-        lab = "positive"
-    elif sc["compound"] < -0.05:
-        lab = "negative"
-    else:
-        lab = "neutral"
-    rows.append({"neg": sc["neg"], "neu": sc["neu"], "pos": sc["pos"], "sentiment": lab})
+texts = df_posts["text_clean"].tolist()
 
-df = pd.concat([df_posts.reset_index(drop=True), pd.DataFrame(rows)], axis=1)
+try:
+    df_scores = score_finbert(texts) if USE_FINBERT else score_vader(texts)
+    method = "FinBERT" if USE_FINBERT else "VADER"
+except Exception as e:
+    print("[sentiment] FinBERT failed, falling back to VADER:", e)
+    df_scores = score_vader(texts)
+    method = "VADER"
+
+print(f"[sentiment] method = {method}, rows = {len(df_scores)}")
+
+df = pd.concat([df_posts.reset_index(drop=True), df_scores.reset_index(drop=True)], axis=1)
 df["date_utc"] = ensure_utc(df["date"])
 
 # -------------------- 3) DAILY FEATURES --------------------
