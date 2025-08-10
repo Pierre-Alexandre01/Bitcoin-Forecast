@@ -606,6 +606,110 @@ rv_plot = pd.DataFrame({
     "rv_pred": yhat_all
 }, index=har.index)
 
+# ---- Volatility backtest (walk-forward, 1-step ahead) ----
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+VOL_BACKTEST_DAYS = int(os.getenv("VOL_BACKTEST_DAYS", "40"))
+MIN_TRAIN = max(30, int(0.6 * len(har)))  # need enough history to start
+
+# indices aligned with features X_cols and target 'y' (log next-day rv)
+n = len(har)
+start_idx = max(MIN_TRAIN, n - VOL_BACKTEST_DAYS)
+pred_idx = []
+rv_true = []
+rv_pred_oos = []
+
+for i in range(start_idx, n):          # predict row i using rows[:i]
+    X_tr = har.iloc[:i][X_cols].to_numpy()
+    y_tr = har.iloc[:i]["y"].to_numpy()  # log RV_next
+
+    if len(X_tr) < MIN_TRAIN:           # just in case
+        continue
+
+    # re-fit scaler + model each step (true walk-forward)
+    scaler_bt = RobustScaler()
+    X_tr_s = scaler_bt.fit_transform(X_tr)
+
+    gb_bt = GradientBoostingRegressor(
+        loss="huber", n_estimators=500, learning_rate=0.03,
+        subsample=0.7, max_depth=3, random_state=42
+    )
+    gb_bt.fit(X_tr_s, y_tr)
+
+    # predict y at i (log next-day rv), then exponentiate back to rv
+    X_te = har.iloc[[i]][X_cols].to_numpy()
+    y_hat_log = gb_bt.predict(scaler_bt.transform(X_te))[0]
+    rv_hat = float(np.exp(y_hat_log))
+
+    # the corresponding "true" next-day rv is exp(y[i])
+    rv_true_i = float(np.exp(har.iloc[i]["y"]))  # this is rv_{i+1}
+
+    pred_idx.append(har.index[i])    # label with current row's timestamp
+    rv_true.append(rv_true_i)
+    rv_pred_oos.append(rv_hat)
+
+bt = pd.DataFrame({
+    "rv_true": rv_true,
+    "rv_pred": rv_pred_oos,
+}, index=pd.Index(pred_idx, name="date_day"))
+
+if not bt.empty:
+    # daily sigma from rv
+    bt["sigma_true"] = np.sqrt(bt["rv_true"])
+    bt["sigma_pred"] = np.sqrt(bt["rv_pred"])
+
+    # simple OOS metrics on RV and sigma
+    rmse_rv  = mean_squared_error(bt["rv_true"], bt["rv_pred"], squared=False)
+    mae_rv   = mean_absolute_error(bt["rv_true"], bt["rv_pred"])
+    rmse_sig = mean_squared_error(bt["sigma_true"], bt["sigma_pred"], squared=False)
+    mae_sig  = mean_absolute_error(bt["sigma_true"], bt["sigma_pred"])
+
+    # QLIKE (smaller is better) on RV; guard against zero
+    eps = 1e-12
+    qlike = np.mean(np.log(bt["rv_pred"] + eps) + bt["rv_true"] / (bt["rv_pred"] + eps))
+
+    print(f"[vol OOS] last {len(bt)} days  RMSE(rv)={rmse_rv:.6g}  MAE(rv)={mae_rv:.6g}  "
+          f"RMSE(sigma)={rmse_sig:.6g}  MAE(sigma)={mae_sig:.6g}  QLIKE={qlike:.6g}")
+
+    # plot: show OOS vs true with shading over the backtest window
+    fig, ax = plt.subplots(figsize=(10, 4))
+    # show the most recent ~90 days of in-sample for context
+    context_start = har.index.max() - pd.Timedelta(days=max(90, VOL_BACKTEST_DAYS + 10))
+    ctx = rv_plot.loc[rv_plot.index >= context_start]
+
+    ax.plot(ctx.index, ctx["rv_true"], label="RV next (true, in-sample)", alpha=0.35)
+    ax.plot(ctx.index, ctx["rv_pred"], label="RV next (pred, in-sample)", alpha=0.35)
+
+    # OOS segment
+    ax.plot(bt.index, bt["rv_true"], label="RV next (true, OOS)", linewidth=1.8)
+    ax.plot(bt.index, bt["rv_pred"], label="RV next (pred, OOS)", linewidth=1.8, linestyle="--")
+
+    # shade OOS region
+    ax.axvspan(bt.index.min(), bt.index.max(), alpha=0.08)
+
+    ax.set_title(f"Volatility backtest (walk-forward 1-step)  •  "
+                 f"RMSEσ={rmse_sig:.4g}, MAEσ={mae_sig:.4g}, QLIKE={qlike:.4g}")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="upper left")
+
+    ax2 = ax.twinx()
+    ax2.set_ylabel("σ (daily)")
+    # optionally show σ OOS to give a sense of scale
+    ax2.plot(bt.index, bt["sigma_pred"], linestyle=":", alpha=0.6, label="σ pred (OOS)")
+    # merge legends
+    h1,l1 = ax.get_legend_handles_labels()
+    h2,l2 = ax2.get_legend_handles_labels()
+    fig.legend(h1+h2, l1+l2, loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=2, frameon=False)
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(REPORT_OUT, "fig_rv_backtest.png"), dpi=160)
+    plt.close(fig)
+
+    # save the numeric series too
+    bt.reset_index().to_csv(os.path.join(REPORT_OUT, f"vol_backtest_{stamp}.csv"), index=False)
+else:
+    print("[vol OOS] not enough history to run a backtest.")
+
 # ---- Multi-step volatility forecast (roll the HAR-lite state forward) ----
 FUTURE_DAYS = int(os.getenv("VOL_FUTURE_DAYS", "10"))  # tweak via env if you like
 
