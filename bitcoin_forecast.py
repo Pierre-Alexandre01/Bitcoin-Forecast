@@ -1,12 +1,12 @@
-# bitcoin_forecast.py 
+# bitcoin_forecast.py
 # Action-safe Bitcoin forecast pipeline (daily, headless)
-# - Collects Bitcoin headlines (Google News + Reddit RSS)
-# - Scores sentiment (VADER)
+# - Collects Bitcoin headlines (Google News + Reddit RSS + curated RSS + GDELT)
+# - Scores sentiment (FinBERT optional via USE_FINBERT, VADER fallback)
 # - Joins with BTC-USD prices (yfinance)
-# - Direction model (logistic)
-# - HAR-lite daily volatility model from squared daily returns
-# - Monte Carlo price distributions (1d / 7d / 30d)
-# - Saves figures + CSVs + LaTeX inputs for a Beamer report
+# - Direction model (logistic, unchanged)
+# - HAR-lite daily volatility model from squared daily returns (unchanged)
+# - Monte Carlo price distributions (1d / 7d / 30d) (unchanged)
+# - Saves figures + CSVs + LaTeX inputs for a Beamer report (unchanged)
 
 import os, re, math, json, warnings
 import numpy as np
@@ -27,7 +27,6 @@ import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 np.set_printoptions(precision=4, suppress=True)
 
-
 # -------------------- UTILS --------------------
 def ensure_utc(series):
     s = pd.to_datetime(series, errors="coerce")
@@ -41,16 +40,14 @@ def ensure_utc(series):
         s = s.dt.tz_convert("UTC")
     return s
 
-
 def clean_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
-    s = re.sub(r"http\S+|www\.\S+", "", s)
-    s = re.sub(r"@[A-Za-z0-9_]+", "@user", s)
-    s = re.sub(r"#", "", s)
+    s = re.sub(r"http\S+|www\.\S+", "", s)         # strip urls
+    s = re.sub(r"@[A-Za-z0-9_]+", "@user", s)      # anonymize handles
+    s = re.sub(r"#", "", s)                        # drop hash but keep word
     s = re.sub(r"\s+", " ", s).strip()
     return s
-
 
 def usd(x):
     try:
@@ -58,8 +55,9 @@ def usd(x):
     except Exception:
         return "--"
 
-
-# -------------------- 1) HEADLINES --------------------
+# =============================================================================
+# 1) HEADLINES (upgraded collectors, same interfaces/columns)
+# =============================================================================
 import requests, certifi, feedparser
 from urllib.parse import urlparse
 from gnews import GNews
@@ -72,14 +70,13 @@ USE_GNEWS     = os.getenv("USE_GNEWS", "true").lower() == "true"
 USE_REDDIT    = os.getenv("USE_REDDIT", "true").lower() == "true"
 USE_RSS       = os.getenv("USE_RSS", "true").lower() == "true"
 USE_GDELT     = os.getenv("USE_GDELT", "true").lower() == "true"
-
-# Optional: tweak how many items we try per feed
 MAX_PER_FEED  = int(os.getenv("MAX_PER_FEED", "400"))
 
-# --- helper ---
 def _to_utc(ts):
-    try:    return pd.to_datetime(ts, utc=True)
-    except: return pd.Timestamp.utcnow()
+    try:
+        return pd.to_datetime(ts, utc=True)
+    except Exception:
+        return pd.Timestamp.utcnow()
 
 def _host(u):
     try:
@@ -87,7 +84,7 @@ def _host(u):
     except Exception:
         return ""
 
-# --- Google News (no key) ---
+# ---- Google News (no key) ----
 def get_google_news(topic=QUERY_TOPIC, max_results=400):
     if not USE_GNEWS:
         return pd.DataFrame(columns=["date","text","source","url"])
@@ -109,7 +106,7 @@ def get_google_news(topic=QUERY_TOPIC, max_results=400):
         print("[google_news] failed ->", e)
         return pd.DataFrame(columns=["date","text","source","url"])
 
-# --- Reddit RSS (no key) ---
+# ---- Reddit RSS (no key) ----
 def get_reddit_rss(subreddits=("Bitcoin","CryptoCurrency","BitcoinMarkets","CryptoMarkets"),
                    days=SCRAPE_DAYS, max_per_sub=300):
     if not USE_REDDIT:
@@ -122,14 +119,17 @@ def get_reddit_rss(subreddits=("Bitcoin","CryptoCurrency","BitcoinMarkets","Cryp
             feed = feedparser.parse(url)
             cnt = 0
             for e in feed.entries:
-                if cnt >= max_per_sub: break
+                if cnt >= max_per_sub:
+                    break
                 dt  = _to_utc(getattr(e, "published", getattr(e, "updated", datetime.utcnow())))
-                if dt < cutoff: continue
+                if dt < cutoff:
+                    continue
                 title   = getattr(e, "title", "")
                 summary = getattr(e, "summary", "")
                 link    = getattr(e, "link", "")
                 txt = f"{title}. {summary}".strip()
-                if len(txt) < 6: continue
+                if len(txt) < 6:
+                    continue
                 rows.append({"date": dt, "text": txt, "source": f"reddit/r/{sub}", "url": link})
                 cnt += 1
             print(f"[reddit:r/{sub}] {cnt} items")
@@ -137,9 +137,9 @@ def get_reddit_rss(subreddits=("Bitcoin","CryptoCurrency","BitcoinMarkets","Cryp
             print(f"[reddit:r/{sub}] failed -> {ex}")
     return pd.DataFrame(rows)
 
-# --- Generic RSS packs (FT/NYT headlines + crypto outlets etc.) ---
+# ---- Curated RSS pack (headlines/snippets only) ----
 NEWS_RSS = {
-    # Big papers (headlines/snippets via RSS – no paywalled full text)
+    # Big papers (headline feeds; no paywalled full text)
     "nyt_business": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
     "nyt_markets":  "https://rss.nytimes.com/services/xml/rss/nyt/YourMoney.xml",
     "ft_markets":   "https://www.ft.com/markets?format=rss",
@@ -162,14 +162,18 @@ def get_rss_many(feeds=NEWS_RSS, days=SCRAPE_DAYS, max_per_feed=MAX_PER_FEED):
             f = feedparser.parse(url)
             cnt = 0
             for e in f.entries:
-                if cnt >= max_per_feed: break
+                if cnt >= max_per_feed:
+                    break
                 dt  = _to_utc(getattr(e, "published", getattr(e, "updated", datetime.utcnow())))
-                if dt < cutoff: continue
+                if dt < cutoff:
+                    continue
                 title   = getattr(e, "title", "")
-                summary = getattr(e, "summary", "")
+                # Prefer summary/detail, fallback to title only
+                summary = getattr(e, "summary", "") or getattr(e, "description", "")
                 link    = getattr(e, "link", "")
-                txt = f"{title}. {summary}".strip()
-                if len(txt) < 6: continue
+                txt = f"{title}. {summary}".strip() if summary else (title or "")
+                if len(txt) < 6:
+                    continue
                 rows.append({"date": dt, "text": txt, "source": f"rss/{name}", "url": link})
                 cnt += 1
             print(f"[rss:{name}] {cnt} items")
@@ -177,7 +181,7 @@ def get_rss_many(feeds=NEWS_RSS, days=SCRAPE_DAYS, max_per_feed=MAX_PER_FEED):
             print(f"[rss:{name}] failed -> {ex}")
     return pd.DataFrame(rows)
 
-# --- GDELT (broad, free, no key) ---
+# ---- GDELT (broad, free, no key) ----
 def get_gdelt(q="bitcoin OR btc", days=SCRAPE_DAYS):
     if not USE_GDELT:
         return pd.DataFrame(columns=["date","text","source","url"])
@@ -193,7 +197,7 @@ def get_gdelt(q="bitcoin OR btc", days=SCRAPE_DAYS):
             ttl = a.get("title","")
             src = a.get("sourceCommonName","")
             url = a.get("url","")
-            txt = f"{ttl}. {src}".strip()
+            txt = f"{ttl}. {src}".strip() if src else ttl
             if txt:
                 rows.append({"date": dt, "text": txt, "source": "gdelt", "url": url})
         print(f"[gdelt] {len(rows)} items")
@@ -202,7 +206,7 @@ def get_gdelt(q="bitcoin OR btc", days=SCRAPE_DAYS):
         print("[gdelt] failed ->", e)
         return pd.DataFrame(columns=["date","text","source","url"])
 
-# ---- Pull everything (all optional via flags) ----
+# ---- Pull all collectors (toggle by flags) ----
 frames = []
 for fn in (get_google_news, get_reddit_rss, get_rss_many, get_gdelt):
     try:
@@ -215,19 +219,35 @@ for fn in (get_google_news, get_reddit_rss, get_rss_many, get_gdelt):
 if not frames:
     raise RuntimeError("No headlines collected (try enabling RSS/GDELT or widening SCRAPE_DAYS).")
 
-# Stronger de-dup: prefer (host + title) when we have URLs, else text
+# Stronger de-dup: prefer (host + text) when URL exists
 raw = pd.concat(frames, ignore_index=True)
+raw["url"] = raw.get("url", "")
 raw["url_host"] = raw["url"].fillna("").map(_host)
-dedup_cols = np.where(raw["url"].notna() & raw["url"].ne(""),
-                      ["url_host","text"], ["text"])
-# simple path: drop duplicates by (url_host, text) when url exists
-df_posts = (raw.drop_duplicates(subset=["url_host","text"])
-               .drop(columns=["url_host"])
-               .sort_values("date")
-               .reset_index(drop=True))
+
+# Simple dedup by (url_host, text) when url exists; otherwise by text alone
+df_posts = (
+    raw.drop_duplicates(subset=["url_host", "text"])
+       .drop(columns=["url_host"])
+       .sort_values("date")
+       .reset_index(drop=True)
+)
+
+# Tag a high-level source category (news vs reddit vs other) for later analysis (doesn't change model)
+def categorize(src: str) -> str:
+    s = (src or "").lower()
+    if s.startswith("reddit/"):
+        return "reddit"
+    if s.startswith("rss/") or s in ("google_news", "gdelt"):
+        return "news"
+    return "other"
+
+df_posts["source_cat"] = df_posts["source"].astype(str).map(categorize)
+
 print(f"[collect] total={len(raw)} unique={len(df_posts)}")
 
-# -------------------- 2) SENTIMENT (FinBERT, VADER fallback) --------------------
+# =============================================================================
+# 2) SENTIMENT (FinBERT optional, VADER fallback) — UNCHANGED
+# =============================================================================
 USE_FINBERT = os.getenv("USE_FINBERT", "false").lower() == "true"
 
 def score_vader(texts):
@@ -279,7 +299,9 @@ print(f"[sentiment] method = {method}, rows = {len(df_scores)}")
 df = pd.concat([df_posts.reset_index(drop=True), df_scores.reset_index(drop=True)], axis=1)
 df["date_utc"] = ensure_utc(df["date"])
 
-# -------------------- 3) DAILY FEATURES --------------------
+# =============================================================================
+# 3) DAILY FEATURES — UNCHANGED (plus harmless extras you can ignore)
+# =============================================================================
 d = df.copy()
 d["date_day"] = d["date_utc"].dt.floor("D")
 d["is_pos"] = (d["sentiment"] == "positive").astype(int)
@@ -287,23 +309,39 @@ d["is_neg"] = (d["sentiment"] == "negative").astype(int)
 
 agg = (
     d.groupby("date_day")
-    .agg(
+     .agg(
         n=("text", "count"),
         pos_share=("is_pos", "mean"),
         neg_share=("is_neg", "mean"),
         pos_mean=("pos", "mean"),
         neg_mean=("neg", "mean"),
-    )
-    .reset_index()
+     )
+     .reset_index()
 )
 agg["sent_balance"] = agg["pos_share"] - agg["neg_share"]
 df_daily = agg.sort_values("date_day")
 
-# strictly lag (yesterday only)
+# strictly lag (yesterday only) — model uses these as before
 for c in ["pos_share", "neg_share", "pos_mean", "neg_mean", "sent_balance"]:
     df_daily[c] = df_daily[c].shift(1)
 
-# -------------------- 4) BTC DAILY PRICES --------------------
+# (Optional extras, not used by your model; safe to ignore)
+# Per-category counts (news vs reddit)
+try:
+    cat_counts = (
+        d.groupby(["date_day","source_cat"])
+         .size()
+         .unstack(fill_value=0)
+         .add_prefix("n_")
+         .reset_index()
+    )
+    df_daily = df_daily.merge(cat_counts, on="date_day", how="left")
+except Exception:
+    pass
+
+# =============================================================================
+# 4) BTC DAILY PRICES — UNCHANGED
+# =============================================================================
 import yfinance as yf
 
 end = datetime.utcnow()
@@ -330,12 +368,14 @@ data = (
       .reset_index(drop=True)
 )
 
-# forward-fill sentiment a little to handle sparse days
+# forward-fill sentiment a little to handle sparse days (unchanged)
 for col in ["n", "pos_share", "neg_share", "pos_mean", "neg_mean", "sent_balance"]:
     if col in data.columns:
         data[col] = data[col].fillna(method="ffill", limit=3)
 
-# -------------------- 5) DIRECTION MODEL (LOGIT) --------------------
+# =============================================================================
+# 5) DIRECTION MODEL (LOGIT) — UNCHANGED
+# =============================================================================
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
@@ -368,7 +408,9 @@ else:
 
 print(f"\nDirection P(up) via {dir_model_name}: {p_up_1d:.3f}")
 
-# -------------------- 6) VOL MODEL: HAR-lite (from daily squared returns) --------------------
+# =============================================================================
+# 6) VOL MODEL: HAR-lite — UNCHANGED
+# =============================================================================
 rv = fe[["date_day", "ret"]].copy()
 rv["rv"] = rv["ret"].pow(2)
 rv = rv.dropna()
@@ -411,7 +453,9 @@ rv_plot = pd.DataFrame({
     "rv_pred": yhat_all
 }, index=har.index)
 
-# -------------------- 7) PRICE DISTRIBUTIONS --------------------
+# =============================================================================
+# 7) PRICE DISTRIBUTIONS — UNCHANGED
+# =============================================================================
 spot = float(data["Adj Close"].dropna().iloc[-1])
 last_day = pd.to_datetime(data["date_day"].dropna().iloc[-1])
 
@@ -419,19 +463,15 @@ mu_recent = float(data["ret"].dropna().tail(30).mean())
 sent_tilt = 0.5 * (p_up_1d - 0.5)  # small tilt by sentiment
 mu_1d = mu_recent + sent_tilt * sigma_1d
 
-
 def horizon_params(days):
     return mu_1d * days, sigma_1d * math.sqrt(days)
 
-
 rng = np.random.default_rng(42)
-
 
 def simulate_prices(S0, days, sims=20000):
     mu, sig = horizon_params(days)
     r = rng.normal(mu, sig, size=sims)
     return S0 * np.exp(r)
-
 
 def summarize(ST):
     pct = np.percentile
@@ -444,7 +484,6 @@ def summarize(ST):
         "mean": float(np.mean(ST)),
         "prob_up": float(np.mean(ST > spot)),
     }
-
 
 res_1d = summarize(simulate_prices(spot, 1))
 res_7d = summarize(simulate_prices(spot, 7))
@@ -461,10 +500,11 @@ for name, res in [("1-Day", res_1d), ("7-Day", res_7d), ("30-Day", res_30d)]:
             .format(res["median"], res["p10"], res["p90"], res["p05"], res["p95"], 100 * res["prob_up"])
     )
 
-# -------------------- 8) SAVE ARTIFACTS --------------------
+# =============================================================================
+# 8) SAVE ARTIFACTS — UNCHANGED
+# =============================================================================
 stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M")
 
-# CSV / JSON
 df.to_csv(os.path.join(REPORT_OUT, f"posts_scored_{stamp}.csv"), index=False)
 df_daily.to_csv(os.path.join(REPORT_OUT, f"sentiment_daily_{stamp}.csv"), index=False)
 data.to_csv(os.path.join(REPORT_OUT, f"joined_price_sentiment_{stamp}.csv"), index=False)
@@ -482,27 +522,56 @@ summary = {
 with open(os.path.join(REPORT_OUT, f"forecast_summary_{stamp}.json"), "w") as f:
     json.dump(summary, f, indent=2)
 
-# -------------------- 9) FIGURES --------------------
-# (A) BTC price vs sentiment balance
+# =============================================================================
+# 9) FIGURES — improved price/sent plot; others unchanged
+# =============================================================================
+# (A) BTC price vs sentiment balance (smoothed)
 try:
+    plot_df = data.copy()
+    # Smooth sentiment for readability (does not alter modeling)
+    if "sent_balance" in plot_df.columns:
+        plot_df["sent_balance_smooth"] = (
+            plot_df["sent_balance"]
+            .rolling(7, min_periods=3)
+            .mean()
+        )
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(data["date_day"], data["Adj Close"], label="BTC Adj Close")
+    ax.plot(plot_df["date_day"], plot_df["Adj Close"], label="BTC Adj Close", linewidth=1.8)
+    ax.set_xlabel("Date"); ax.set_ylabel("Price (USD)")
+    ax.grid(True, alpha=0.25)
+
     ax2 = ax.twinx()
-    ax2.plot(data["date_day"], data["sent_balance"], label="Sentiment balance (lag1)", linestyle="--")
-    ax.set_title("BTC price vs sentiment balance")
-    ax.set_xlabel("Date"); ax.set_ylabel("Price (USD)"); ax2.set_ylabel("Sentiment")
+    yseries = plot_df.get("sent_balance_smooth", plot_df.get("sent_balance"))
+    ax2.plot(plot_df["date_day"], yseries, label="Sentiment balance (7D avg)", linestyle="--", linewidth=1.8)
+    ax2.set_ylabel("Sentiment balance")
+
+    # unified legend
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
+
+    # nicer date ticks
+    try:
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=8))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+        fig.autofmt_xdate()
+    except Exception:
+        pass
+
     fig.tight_layout()
     fig.savefig(os.path.join(REPORT_OUT, "fig_price_sent.png"), dpi=160)
     plt.close(fig)
 except Exception as e:
     print("[warn] could not render price/sent figure:", e)
 
-# (B) RV true vs predicted (in-sample for illustration)
+# (B) RV true vs predicted (in-sample)
 try:
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(rv_plot.index, rv_plot["rv_true"], label="RV next (true)")
     ax.plot(rv_plot.index, rv_plot["rv_pred"], label="RV next (pred)", alpha=0.9)
     ax.legend(); ax.set_title("Next-day realized variance — HAR-lite (in-sample)")
+    ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(os.path.join(REPORT_OUT, "fig_rv.png"), dpi=160)
     plt.close(fig)
@@ -523,6 +592,7 @@ try:
     ax.set_xticks(x, horizons)
     ax.set_title("Price forecast intervals (10–90%)")
     ax.set_ylabel("USD")
+    ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()
     fig.savefig(os.path.join(REPORT_OUT, "fig_intervals.png"), dpi=160)
@@ -530,7 +600,9 @@ try:
 except Exception as e:
     print("[warn] could not render intervals figure:", e)
 
-# -------------------- 10) WRITE LaTeX INPUTS --------------------
+# =============================================================================
+# 10) WRITE LaTeX INPUTS — UNCHANGED (keeps \csname…\endcsname style)
+# =============================================================================
 inputs_tex = r"""
 %% Auto-generated by pipeline. DO NOT EDIT.
 
