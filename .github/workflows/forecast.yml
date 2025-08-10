@@ -42,6 +42,11 @@ jobs:
       - name: Run forecast (generates report/inputs.tex + PNGs)
         run: python -u bitcoin_forecast.py
 
+      - name: Run forecast
+        env:
+          USE_FINBERT: 'false'   # set to 'true' if you added transformers/torch
+        run: python -u bitcoin_forecast.py
+
       - name: Compile Beamer PDF
         uses: xu-cheng/latex-action@v3
         with:
