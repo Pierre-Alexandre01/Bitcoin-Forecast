@@ -62,7 +62,7 @@ jobs:
           path: report/outputs/**
 
       - name: Push to Overleaf (publish report + figures)
-        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}   # <-- FIXED
+        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}   # FIXED
         env:
           OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
         shell: bash
@@ -82,10 +82,6 @@ jobs:
           git add -A
           ts=$(date -u +%Y-%m-%dT%H:%MZ)
           git commit -m "Auto-publish ${ts}"
-
-          git branch -M master
-          git remote add overleaf "$url"
-          git push -f overleaf master
 
           git branch -M master
           git remote add overleaf "$url"
