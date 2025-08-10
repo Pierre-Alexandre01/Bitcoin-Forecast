@@ -2,7 +2,7 @@ name: Daily Bitcoin Forecast
 
 on:
   schedule:
-    - cron: "17 6 * * *"   # runs every day at 06:17 UTC
+    - cron: "17 6 * * *"   # every day at 06:17 UTC
   workflow_dispatch:
   push:
     branches: [ main ]
@@ -39,40 +39,10 @@ jobs:
           nltk.download("vader_lexicon", quiet=True)
           PY
 
-      - name: Run forecast
+      - name: Run forecast (generates report/inputs.tex + PNGs)
         run: python -u bitcoin_forecast.py
 
-      # Turn metrics.json into LaTeX defs used by the report
-      - name: Create inputs.tex from metrics.json
-        run: |
-          python - << 'PY'
-          import json, os, sys
-          p = "report/outputs/metrics.json"
-          if not os.path.exists(p):
-              sys.exit(f"❌ Missing {p}. Ensure your script writes metrics there.")
-          with open(p) as f:
-              m = json.load(f)
-          def usd(x): return f"{x:,.2f}"
-          lines = [
-            f"\\def\\reportDate{{{m['reportDate']}}}",
-            f"\\def\\spotUSD{{{usd(m['spotUSD'])}}}",
-            f"\\def\\probUpOneDay{{{m['probUpOneDay']}}}",
-            f"\\def\\sigmaOneDay{{{m['sigmaOneDay']}}}",
-            f"\\def\\pOneMed{{{usd(m['p1']['med'])}}}",
-            f"\\def\\pOneP10{{{usd(m['p1']['p10'])}}}",
-            f"\\def\\pOneP90{{{usd(m['p1']['p90'])}}}",
-            f"\\def\\pSevenMed{{{usd(m['p7']['med'])}}}",
-            f"\\def\\pSevenP10{{{usd(m['p7']['p10'])}}}",
-            f"\\def\\pSevenP90{{{usd(m['p7']['p90'])}}}",
-            f"\\def\\pThirtyMed{{{usd(m['p30']['med'])}}}",
-            f"\\def\\pThirtyP10{{{usd(m['p30']['p10'])}}}",
-            f"\\def\\pThirtyP90{{{usd(m['p30']['p90'])}}}",
-          ]
-          with open("report/inputs.tex", "w") as f:
-              f.write("\n".join(lines) + "\n")
-          print("✅ Wrote report/inputs.tex")
-          PY
-
+      # Compile the Beamer report that includes report/inputs.tex and images in report/outputs/
       - name: Compile Beamer PDF
         uses: xu-cheng/latex-action@v3
         with:
@@ -80,45 +50,29 @@ jobs:
           working_directory: report
           latexmk_use_xelatex: true
 
+      # Artifacts for download from the Actions page
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-forecast-report
           path: report/main.pdf
 
-      - name: Upload outputs (PNGs/JSON)
+      - name: Upload outputs (PNGs/JSON/CSVs)
         uses: actions/upload-artifact@v4
         with:
           name: btc-forecast-outputs
           path: report/outputs/**
 
-        # OPTIONAL: configure credentials only if BOTH secrets are set
-      - name: Configure Overleaf credentials (optional)
-        run: |
-          if [ -n "${{ secrets.OVERLEAF_GIT_URL }}" ] && [ -n "${{ secrets.OVERLEAF_TOKEN }}" ]; then
-            echo "Configuring Overleaf credentials..."
-            git config --global credential.helper store
-            printf "https://git:%s@git.overleaf.com\n" "${{ secrets.OVERLEAF_TOKEN }}" > ~/.git-credentials
-          else
-            echo "Skipping credential config (missing OVERLEAF_GIT_URL or OVERLEAF_TOKEN)."
-          fi
-
-      # OPTIONAL: push report to Overleaf if URL secret exists (token may be inside URL or from the previous step)
+      # OPTIONAL: push the compiled report + figures to Overleaf (paid Overleaf Git-Bridge)
       - name: Push to Overleaf (publish report + figures)
+        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         run: |
-          if [ -z "${{ secrets.OVERLEAF_GIT_URL }}" ]; then
-            echo "Skipping Overleaf push (OVERLEAF_GIT_URL not set)."
-            exit 0
-          fi
-
           set -e
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@users.noreply.github.com"
-
           rm -rf /tmp/overleaf && mkdir -p /tmp/overleaf
           cp -r report /tmp/overleaf/
           cd /tmp/overleaf
-
           git init
           git add -A
           git commit -m "Auto-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
