@@ -70,9 +70,9 @@ jobs:
       - name: Compile Beamer PDF (XeLaTeX)
         uses: xu-cheng/latex-action@v3
         with:
-          root_file: main.tex            # <-- use the root file
+          root_file: main.tex        # <- compile the root main.tex
+          working_directory: .       # (default, can omit)
           latexmk_use_xelatex: true
-          # working_directory defaults to repo root, which we want here
 
       - name: Upload PDF
         uses: actions/upload-artifact@v4
