@@ -66,22 +66,26 @@ jobs:
           OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
         shell: bash
         run: |
-          set -euo pipefail
-          if [ -z "${OVERLEAF_URL:-}" ]; then
+          # be strict, but don't fail on unset because the secret might be missing
+          set -eo pipefail
+
+          # default the env var so nounset isn't a problem
+          OVERLEAF_URL="${OVERLEAF_URL:-}"
+          if [ -z "$OVERLEAF_URL" ]; then
             echo "OVERLEAF_GIT_URL not set; skipping Overleaf publish."
             exit 0
           fi
           echo "::add-mask::${OVERLEAF_URL}"
 
           tmp="$(mktemp -d)"
-          # 1) Clone the Overleaf project (no force pushes needed)
-          git clone --depth 1 "${OVERLEAF_URL}" "${tmp}/overleaf"
+          # 1) Clone the current Overleaf head
+          git clone --depth 1 "$OVERLEAF_URL" "$tmp/overleaf"
 
-          # 2) Copy our freshly-built report into the clone (wipe stale files)
-          rsync -a --delete --exclude ".git" report/ "${tmp}/overleaf/"
+          # 2) Copy our freshly built report into the clone (keep it tidy)
+          rsync -a --delete --exclude ".git" report/ "$tmp/overleaf/"
 
-          # 3) Commit & push on top of the current Overleaf head
-          cd "${tmp}/overleaf"
+          # 3) Commit & push on top of the current head
+          cd "$tmp/overleaf"
           git config user.name  "GitHub Actions"
           git config user.email "actions@users.noreply.github.com"
 
