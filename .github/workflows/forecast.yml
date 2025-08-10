@@ -62,7 +62,7 @@ jobs:
           path: report/outputs/**
 
       - name: Push to Overleaf (publish report + figures)
-        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}   # <-- the correct expression wrapper
+        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         env:
           OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
         shell: bash
