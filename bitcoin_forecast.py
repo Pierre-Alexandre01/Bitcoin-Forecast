@@ -740,40 +740,6 @@ try:
 except Exception as e:
     print("[warn] could not render direction reliability/ROC:", e)
 
-# (E) News mix over the last 14 days (stacked bars)
-try:
-    days_back = 14
-    cutoff = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=days_back)
-    df_recent = df.copy()
-    df_recent = df_recent[df_recent["date_utc"] >= cutoff]
-
-    if not df_recent.empty:
-        df_recent["day"] = df_recent["date_utc"].dt.floor("D")
-        mix = (
-            df_recent.groupby(["day","source_cat"])
-                     .size().unstack(fill_value=0)[["news","reddit","other"]]
-                     if set(["news","reddit","other"]).issubset(df_recent["source_cat"].unique())
-                     else df_recent.groupby(["day","source_cat"]).size().unstack(fill_value=0)
-        ).sort_index()
-
-        fig, ax = plt.subplots(figsize=(8, 4))
-        bottom = np.zeros(len(mix))
-        for col in mix.columns:
-            ax.bar(mix.index, mix[col].values, bottom=bottom, label=col)
-            bottom += mix[col].values
-        ax.set_title(f"Headline mix by source (last {days_back} days)")
-        ax.set_ylabel("# items")
-        ax.grid(True, axis="y", alpha=0.25)
-        ax.legend(loc="upper left", ncols=3, frameon=False)
-        fig.autofmt_xdate()
-        fig.tight_layout()
-        fig.savefig(os.path.join(REPORT_OUT, "fig_news_mix.png"), dpi=160)
-        plt.close(fig)
-    else:
-        print("[mix] No recent headlines to plot.")
-except Exception as e:
-    print("[warn] could not render news mix:", e)
-
 # =============================================================================
 # 10) WRITE LaTeX INPUTS — UNCHANGED (keeps \csname…\endcsname style)
 # =============================================================================
