@@ -10,3 +10,6 @@ requests
 certifi
 feedparser
 gnews
+transformers>=4.42
+torch>=2.2; platform_system != "Windows"
+tokenizers>=0.15
