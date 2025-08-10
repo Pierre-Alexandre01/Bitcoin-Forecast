@@ -500,6 +500,26 @@ for name, res in [("1-Day", res_1d), ("7-Day", res_7d), ("30-Day", res_30d)]:
             .format(res["median"], res["p10"], res["p90"], res["p05"], res["p95"], 100 * res["prob_up"])
     )
 
+# ---------- 7b) Build a forward price cone (daily path MC) ----------
+DAYS_FWD = 30     # how far ahead to draw the forecast line
+SIMS     = 20000  # number of simulated paths
+
+def simulate_paths_daily(S0, days, mu_1d, sigma_1d, sims=SIMS, rng=rng):
+    # sims x days matrix of daily log-returns
+    R = rng.normal(loc=mu_1d, scale=sigma_1d, size=(sims, days))
+    # cumulative log-return per path -> price paths
+    paths = S0 * np.exp(np.cumsum(R, axis=1))
+    return paths  # shape: (sims, days)
+
+paths = simulate_paths_daily(spot, DAYS_FWD, mu_1d, sigma_1d)
+fwd_med = np.percentile(paths, 50, axis=0)
+fwd_p10 = np.percentile(paths, 10, axis=0)
+fwd_p90 = np.percentile(paths, 90, axis=0)
+
+future_dates = pd.date_range(
+    start=last_day + pd.Timedelta(days=1),
+    periods=DAYS_FWD, freq="D", tz="UTC"
+)
 # =============================================================================
 # 8) SAVE ARTIFACTS — UNCHANGED
 # =============================================================================
@@ -525,45 +545,57 @@ with open(os.path.join(REPORT_OUT, f"forecast_summary_{stamp}.json"), "w") as f:
 # =============================================================================
 # 9) FIGURES — improved price/sent plot; others unchanged
 # =============================================================================
-# (A) BTC price vs sentiment balance (smoothed)
+# (A) Price history + 30‑day forecast cone + (smoothed) sentiment on secondary axis
 try:
-    plot_df = data.copy()
-    # Smooth sentiment for readability (does not alter modeling)
-    if "sent_balance" in plot_df.columns:
-        plot_df["sent_balance_smooth"] = (
-            plot_df["sent_balance"]
-            .rolling(7, min_periods=3)
-            .mean()
-        )
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(plot_df["date_day"], plot_df["Adj Close"], label="BTC Adj Close", linewidth=1.8)
-    ax.set_xlabel("Date"); ax.set_ylabel("Price (USD)")
-    ax.grid(True, alpha=0.25)
+    # plotting window for history
+    HIST_DAYS = 90
+    mask_hist = data["date_day"] >= (last_day - pd.Timedelta(days=HIST_DAYS-1))
 
+    # smooth sentiment to make it readable
+    sent_sm = data["sent_balance"].rolling(7, min_periods=3).mean()
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+
+    # 1) history (left y-axis)
+    ax.plot(
+        data.loc[mask_hist, "date_day"],
+        data.loc[mask_hist, "Adj Close"],
+        label="BTC Adj Close", lw=2
+    )
+
+    # 2) forecast median + cone (left y-axis)
+    ax.plot(future_dates, fwd_med, lw=2, ls="--", label="Forecast median")
+    ax.fill_between(future_dates, fwd_p10, fwd_p90, alpha=0.20, label="10–90% band")
+
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price (USD)")
+
+    # 3) sentiment (right y-axis, past only)
     ax2 = ax.twinx()
-    yseries = plot_df.get("sent_balance_smooth", plot_df.get("sent_balance"))
-    ax2.plot(plot_df["date_day"], yseries, label="Sentiment balance (7D avg)", linestyle="--", linewidth=1.8)
+    ax2.plot(
+        data.loc[mask_hist, "date_day"],
+        sent_sm.loc[mask_hist],
+        lw=1.8, ls=":", label="Sentiment balance (7D avg)"
+    )
     ax2.set_ylabel("Sentiment balance")
 
-    # unified legend
-    lines1, labels1 = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
+    # tidy up
+    ax.grid(True, axis="y", alpha=0.25)
+    # keep price axis a bit padded so the cone isn’t clipped
+    ymin = min(data.loc[mask_hist, "Adj Close"].min(), fwd_p10.min())
+    ymax = max(data.loc[mask_hist, "Adj Close"].max(), fwd_p90.max())
+    ax.set_ylim(ymin * 0.98, ymax * 1.02)
 
-    # nicer date ticks
-    try:
-        import matplotlib.dates as mdates
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=8))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-        fig.autofmt_xdate()
-    except Exception:
-        pass
+    # combined legend
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    fig.legend(h1 + h2, l1 + l2, loc="upper left", ncols=2, frameon=False)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(REPORT_OUT, "fig_price_sent.png"), dpi=160)
+    fig.savefig(os.path.join(REPORT_OUT, "fig_price_forecast.png"), dpi=160)
     plt.close(fig)
 except Exception as e:
-    print("[warn] could not render price/sent figure:", e)
+    print("[warn] could not render forecast figure:", e)
 
 # (B) RV true vs predicted (in-sample)
 try:
