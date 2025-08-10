@@ -71,24 +71,29 @@ jobs:
             echo "OVERLEAF_GIT_URL not set; skipping Overleaf publish."
             exit 0
           fi
-
           echo "::add-mask::${OVERLEAF_URL}"
 
           tmp="$(mktemp -d)"
-          cp -r report "$tmp/"
-          cd "$tmp/report"
+          # 1) Clone the Overleaf project (no force pushes needed)
+          git clone --depth 1 "${OVERLEAF_URL}" "${tmp}/overleaf"
 
-          git init -q
-          git config user.name "GitHub Actions"
+          # 2) Copy our freshly-built report into the clone (wipe stale files)
+          rsync -a --delete --exclude ".git" report/ "${tmp}/overleaf/"
+
+          # 3) Commit & push on top of the current Overleaf head
+          cd "${tmp}/overleaf"
+          git config user.name  "GitHub Actions"
           git config user.email "actions@users.noreply.github.com"
+
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "No changes to publish."
+            exit 0
+          fi
 
           git add -A
           ts=$(date -u +%Y-%m-%dT%H:%MZ)
           git commit -m "Auto-publish ${ts}"
-
-          git branch -M master
-          git remote add overleaf "${OVERLEAF_URL}"
-          git push -f overleaf master
+          git push origin master
 
           git branch -M master
           git remote add overleaf "$url"
