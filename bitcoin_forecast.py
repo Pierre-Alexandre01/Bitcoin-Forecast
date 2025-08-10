@@ -323,8 +323,9 @@ def w_src(cat: str) -> float:
 
 d["w_src"] = d["source_cat"].astype(str).map(w_src)
 
-now_utc = pd.Timestamp.utcnow().tz_localize("UTC")
-age_days = (now_utc - d["date_utc"]).dt.total_seconds() / 86400.0
+# FIX: use tz-aware datetime directly and convert date_utc to UTC
+now_utc = pd.Timestamp.now(tz="UTC")
+age_days = (now_utc - pd.to_datetime(d["date_utc"], utc=True)).dt.total_seconds() / 86400.0
 d["w_time"] = np.exp(-LAMBDA * age_days.clip(lower=0))
 d["w"] = d["w_src"] * d["w_time"]
 
