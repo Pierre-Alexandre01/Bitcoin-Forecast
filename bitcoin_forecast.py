@@ -562,19 +562,19 @@ else:
 print(f"\nDirection P(up) via {dir_model_name}: {p_up_1d:.3f}")
 
 # =============================================================================
-# 6) VOL MODEL: HAR-lite — UNCHANGED
+# 6) VOL MODEL: HAR-lite with walk-forward backtest
 # =============================================================================
 rv = fe[["date_day", "ret"]].copy()
 rv["rv"] = rv["ret"].pow(2)
 rv = rv.dropna()
 
 har = rv.set_index("date_day").copy()
-har["rv_ema5"] = har["rv"].ewm(span=5, min_periods=5).mean()
+har["rv_ema5"]  = har["rv"].ewm(span=5,  min_periods=5).mean()
 har["rv_ema22"] = har["rv"].ewm(span=22, min_periods=22).mean()
 har["rv_d_lag1"] = har["rv"].shift(1)
 har["rv_w_lag1"] = har["rv_ema5"].shift(1)
 har["rv_m_lag1"] = har["rv_ema22"].shift(1)
-har["y"] = np.log(har["rv"].shift(-1).clip(lower=1e-12))
+har["y"] = np.log(har["rv"].shift(-1).clip(lower=1e-12))  # log next-day RV
 har = har.dropna()
 
 from sklearn.ensemble import GradientBoostingRegressor
@@ -593,13 +593,13 @@ gb = GradientBoostingRegressor(
 )
 gb.fit(Xv_s, yv)
 
-# next-day RV prediction
+# next-day RV prediction (today -> tomorrow)
 x_last = har.iloc[[-1]][X_cols].to_numpy()
 rv_pred_next = float(np.exp(gb.predict(scaler_vol.transform(x_last))[0]))
 sigma_1d = math.sqrt(rv_pred_next)
 print(f"Daily vol (HAR-lite): sigma_1d={sigma_1d:.4%}  RV={rv_pred_next:.6f}")
 
-# in-sample RV predictions (for the figure)
+# in-sample RV predictions (for context plots)
 yhat_all = np.exp(gb.predict(Xv_s))
 rv_plot = pd.DataFrame({
     "rv_true": np.exp(yv),
@@ -612,112 +612,112 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 VOL_BACKTEST_DAYS = int(os.getenv("VOL_BACKTEST_DAYS", "40"))
 MIN_TRAIN = max(30, int(0.6 * len(har)))  # need enough history to start
 
-# indices aligned with features X_cols and target 'y' (log next-day rv)
 n = len(har)
 start_idx = max(MIN_TRAIN, n - VOL_BACKTEST_DAYS)
-pred_idx = []
-rv_true = []
-rv_pred_oos = []
 
-for i in range(start_idx, n):          # predict row i using rows[:i]
-    X_tr = har.iloc[:i][X_cols].to_numpy()
-    y_tr = har.iloc[:i]["y"].to_numpy()  # log RV_next
+pred_idx, rv_true, rv_pred_oos = [], [], []
+if start_idx < n - 1:
+    for i in range(start_idx, n):  # predict row i using rows [:i]
+        X_tr = har.iloc[:i][X_cols].to_numpy()
+        y_tr = har.iloc[:i]["y"].to_numpy()
+        if len(X_tr) < MIN_TRAIN:
+            continue
 
-    if len(X_tr) < MIN_TRAIN:           # just in case
-        continue
+        sc_bt = RobustScaler().fit(X_tr)
+        X_tr_s = sc_bt.transform(X_tr)
 
-    # re-fit scaler + model each step (true walk-forward)
-    scaler_bt = RobustScaler()
-    X_tr_s = scaler_bt.fit_transform(X_tr)
+        gb_bt = GradientBoostingRegressor(
+            loss="huber", n_estimators=500, learning_rate=0.03,
+            subsample=0.7, max_depth=3, random_state=42
+        ).fit(X_tr_s, y_tr)
 
-    gb_bt = GradientBoostingRegressor(
-        loss="huber", n_estimators=500, learning_rate=0.03,
-        subsample=0.7, max_depth=3, random_state=42
-    )
-    gb_bt.fit(X_tr_s, y_tr)
+        X_te = har.iloc[[i]][X_cols].to_numpy()
+        y_hat_log = gb_bt.predict(sc_bt.transform(X_te))[0]
+        rv_hat = float(np.exp(y_hat_log))               # predict rv_{i+1}
+        rv_true_i = float(np.exp(har.iloc[i]["y"]))     # true rv_{i+1}
 
-    # predict y at i (log next-day rv), then exponentiate back to rv
-    X_te = har.iloc[[i]][X_cols].to_numpy()
-    y_hat_log = gb_bt.predict(scaler_bt.transform(X_te))[0]
-    rv_hat = float(np.exp(y_hat_log))
+        pred_idx.append(har.index[i])
+        rv_pred_oos.append(rv_hat)
+        rv_true.append(rv_true_i)
 
-    # the corresponding "true" next-day rv is exp(y[i])
-    rv_true_i = float(np.exp(har.iloc[i]["y"]))  # this is rv_{i+1}
+bt = pd.DataFrame({"rv_true": rv_true, "rv_pred": rv_pred_oos},
+                  index=pd.Index(pred_idx, name="date_day"))
 
-    pred_idx.append(har.index[i])    # label with current row's timestamp
-    rv_true.append(rv_true_i)
-    rv_pred_oos.append(rv_hat)
+# Always produce fig_rv_backtest.png so LaTeX never fails
+bt_fig_path = os.path.join(REPORT_OUT, "fig_rv_backtest.png")
+stamp_bt = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M")
 
-bt = pd.DataFrame({
-    "rv_true": rv_true,
-    "rv_pred": rv_pred_oos,
-}, index=pd.Index(pred_idx, name="date_day"))
+try:
+    if not bt.empty:
+        bt["sigma_true"] = np.sqrt(bt["rv_true"])
+        bt["sigma_pred"] = np.sqrt(bt["rv_pred"])
 
-if not bt.empty:
-    # daily sigma from rv
-    bt["sigma_true"] = np.sqrt(bt["rv_true"])
-    bt["sigma_pred"] = np.sqrt(bt["rv_pred"])
+        rmse_rv  = mean_squared_error(bt["rv_true"], bt["rv_pred"], squared=False)
+        mae_rv   = mean_absolute_error(bt["rv_true"], bt["rv_pred"])
+        rmse_sig = mean_squared_error(bt["sigma_true"], bt["sigma_pred"], squared=False)
+        mae_sig  = mean_absolute_error(bt["sigma_true"], bt["sigma_pred"])
+        eps = 1e-12
+        qlike = float(np.mean(np.log(bt["rv_pred"] + eps) + bt["rv_true"] / (bt["rv_pred"] + eps)))
 
-    # simple OOS metrics on RV and sigma
-    rmse_rv  = mean_squared_error(bt["rv_true"], bt["rv_pred"], squared=False)
-    mae_rv   = mean_absolute_error(bt["rv_true"], bt["rv_pred"])
-    rmse_sig = mean_squared_error(bt["sigma_true"], bt["sigma_pred"], squared=False)
-    mae_sig  = mean_absolute_error(bt["sigma_true"], bt["sigma_pred"])
+        print(f"[vol OOS] last {len(bt)} days  RMSE(rv)={rmse_rv:.6g}  MAE(rv)={mae_rv:.6g}  "
+              f"RMSE(sigma)={rmse_sig:.6g}  MAE(sigma)={mae_sig:.6g}  QLIKE={qlike:.6g}")
 
-    # QLIKE (smaller is better) on RV; guard against zero
-    eps = 1e-12
-    qlike = np.mean(np.log(bt["rv_pred"] + eps) + bt["rv_true"] / (bt["rv_pred"] + eps))
+        # Plot context (recent in-sample) + OOS segment
+        fig, ax = plt.subplots(figsize=(10, 4))
+        context_start = har.index.max() - pd.Timedelta(days=max(90, VOL_BACKTEST_DAYS + 10))
+        ctx = rv_plot.loc[rv_plot.index >= context_start]
 
-    print(f"[vol OOS] last {len(bt)} days  RMSE(rv)={rmse_rv:.6g}  MAE(rv)={mae_rv:.6g}  "
-          f"RMSE(sigma)={rmse_sig:.6g}  MAE(sigma)={mae_sig:.6g}  QLIKE={qlike:.6g}")
+        ax.plot(ctx.index, ctx["rv_true"], label="RV next (true, in-sample)", alpha=0.35)
+        ax.plot(ctx.index, ctx["rv_pred"], label="RV next (pred, in-sample)", alpha=0.35)
+        ax.plot(bt.index, bt["rv_true"], label="RV next (true, OOS)", linewidth=1.8)
+        ax.plot(bt.index, bt["rv_pred"], label="RV next (pred, OOS)", linewidth=1.8, linestyle="--")
+        ax.axvspan(bt.index.min(), bt.index.max(), alpha=0.08)
 
-    # plot: show OOS vs true with shading over the backtest window
-    fig, ax = plt.subplots(figsize=(10, 4))
-    # show the most recent ~90 days of in-sample for context
-    context_start = har.index.max() - pd.Timedelta(days=max(90, VOL_BACKTEST_DAYS + 10))
-    ctx = rv_plot.loc[rv_plot.index >= context_start]
+        ax.set_title(f"Volatility backtest (walk-forward 1-step)  •  "
+                     f"RMSEσ={rmse_sig:.4g}, MAEσ={mae_sig:.4g}, QLIKE={qlike:.4g}")
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="upper left")
 
-    ax.plot(ctx.index, ctx["rv_true"], label="RV next (true, in-sample)", alpha=0.35)
-    ax.plot(ctx.index, ctx["rv_pred"], label="RV next (pred, in-sample)", alpha=0.35)
+        ax2 = ax.twinx()
+        ax2.set_ylabel("σ (daily)")
+        ax2.plot(bt.index, bt["sigma_pred"], linestyle=":", alpha=0.6, label="σ pred (OOS)")
+        h1,l1 = ax.get_legend_handles_labels()
+        h2,l2 = ax2.get_legend_handles_labels()
+        fig.legend(h1+h2, l1+l2, loc="upper center", bbox_to_anchor=(0.5, 1.12),
+                   ncol=2, frameon=False)
 
-    # OOS segment
-    ax.plot(bt.index, bt["rv_true"], label="RV next (true, OOS)", linewidth=1.8)
-    ax.plot(bt.index, bt["rv_pred"], label="RV next (pred, OOS)", linewidth=1.8, linestyle="--")
+        fig.tight_layout()
+        fig.savefig(bt_fig_path, dpi=160)
+        plt.close(fig)
 
-    # shade OOS region
-    ax.axvspan(bt.index.min(), bt.index.max(), alpha=0.08)
-
-    ax.set_title(f"Volatility backtest (walk-forward 1-step)  •  "
-                 f"RMSEσ={rmse_sig:.4g}, MAEσ={mae_sig:.4g}, QLIKE={qlike:.4g}")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="upper left")
-
-    ax2 = ax.twinx()
-    ax2.set_ylabel("σ (daily)")
-    # optionally show σ OOS to give a sense of scale
-    ax2.plot(bt.index, bt["sigma_pred"], linestyle=":", alpha=0.6, label="σ pred (OOS)")
-    # merge legends
-    h1,l1 = ax.get_legend_handles_labels()
-    h2,l2 = ax2.get_legend_handles_labels()
-    fig.legend(h1+h2, l1+l2, loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=2, frameon=False)
-
+        # Save numeric series
+        bt.reset_index().to_csv(os.path.join(REPORT_OUT, f"vol_backtest_{stamp_bt}.csv"), index=False)
+    else:
+        # Not enough data: write a placeholder PNG
+        fig, ax = plt.subplots(figsize=(10, 2.6))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "HAR backtest: not enough data yet",
+                ha="center", va="center", fontsize=12)
+        fig.tight_layout()
+        fig.savefig(bt_fig_path, dpi=160)
+        plt.close(fig)
+        print("[vol OOS] not enough history to run a backtest.")
+except Exception as e:
+    # Last-resort placeholder if plotting fails
+    fig, ax = plt.subplots(figsize=(10, 2.6))
+    ax.axis("off")
+    ax.text(0.5, 0.5, f"HAR backtest failed: {e}", ha="center", va="center", fontsize=10)
     fig.tight_layout()
-    fig.savefig(os.path.join(REPORT_OUT, "fig_rv_backtest.png"), dpi=160)
+    fig.savefig(bt_fig_path, dpi=160)
     plt.close(fig)
-
-    # save the numeric series too
-    bt.reset_index().to_csv(os.path.join(REPORT_OUT, f"vol_backtest_{stamp}.csv"), index=False)
-else:
-    print("[vol OOS] not enough history to run a backtest.")
+    print("[vol OOS] backtest failed:", e)
 
 # ---- Multi-step volatility forecast (roll the HAR-lite state forward) ----
-FUTURE_DAYS = int(os.getenv("VOL_FUTURE_DAYS", "10"))  # tweak via env if you like
+FUTURE_DAYS = int(os.getenv("VOL_FUTURE_DAYS", "10"))
 
-# EWMA update coefficients (because you used ewm(span=...))
 alpha5  = 2.0 / (5  + 1)   # = 1/3
 alpha22 = 2.0 / (22 + 1)   # = 2/23
 
-# last observed state of the lags
 state = {
     "rv_d_lag1": float(har["rv"].iloc[-1]),
     "rv_w_lag1": float(har["rv_ema5"].iloc[-1]),
@@ -730,7 +730,7 @@ for _ in range(FUTURE_DAYS):
     rv_next = float(np.exp(gb.predict(scaler_vol.transform(Xf))[0]))
     rv_fc.append(rv_next)
 
-    # roll state forward using the EWMA recursions
+    # roll EWMAs forward
     state["rv_d_lag1"] = rv_next
     state["rv_w_lag1"] = alpha5  * rv_next + (1 - alpha5)  * state["rv_w_lag1"]
     state["rv_m_lag1"] = alpha22 * rv_next + (1 - alpha22) * state["rv_m_lag1"]
@@ -744,10 +744,10 @@ rv_forecast = pd.DataFrame({
     "sigma_pred": sigma_fc,
 }).set_index("date_day")
 
-# (optional) save to CSV alongside other outputs
+# (optional) save forecast to CSV
 try:
     rv_forecast.reset_index().to_csv(
-        os.path.join(REPORT_OUT, f"vol_forecast_{stamp}.csv"), index=False
+        os.path.join(REPORT_OUT, f"vol_forecast_{stamp_bt}.csv"), index=False
     )
 except Exception:
     pass
