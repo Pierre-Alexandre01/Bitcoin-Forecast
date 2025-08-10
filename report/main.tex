@@ -58,9 +58,9 @@
       \begin{itemize}
         \item Spot: \textbf{\$ \spotUSD}
         \item P(up) tomorrow: \textbf{\probUpOneDay\%}
-        \item 1D median: \textbf{\$ \pOneMed} (10--90\%: \pOneP10--\pOneP90)
-        \item 7D median: \textbf{\$ \pSevenMed} (10--90\%: \pSevenP10--\pSevenP90)
-        \item 30D median: \textbf{\$ \pThirtyMed} (10--90\%: \pThirtyP10--\pThirtyP90)
+        \item 1D median: \textbf{\$ \pOneMed} (10--90\%: \csname pOneP10\endcsname--\csname pOneP90\endcsname)
+        \item 7D median: \textbf{\$ \pSevenMed} (10--90\%: \csname pSevenP10\endcsname--\csname pSevenP90\endcsname)
+        \item 30D median: \textbf{\$ \pThirtyMed} (10--90\%: \csname pThirtyP10\endcsname--\csname pThirtyP90\endcsname)
       \end{itemize}
 
     \column{0.42\textwidth}
@@ -69,16 +69,16 @@
         \toprule
         \textbf{Horizon} & {\textbf{Median (\$)}} \\
         \midrule
-        1D  & {\pOneMedNum} \\
-        7D  & {\pSevenMedNum} \\
-        30D & {\pThirtyMedNum} \\
+        1D  & {\csname pOneMedNum\endcsname} \\
+        7D  & {\csname pSevenMedNum\endcsname} \\
+        30D & {\csname pThirtyMedNum\endcsname} \\
         \midrule
-        1D (10\%)  & {\pOneP10Num} \\
-        1D (90\%)  & {\pOneP90Num} \\
-        7D (10\%)  & {\pSevenP10Num} \\
-        7D (90\%)  & {\pSevenP90Num} \\
-        30D (10\%) & {\pThirtyP10Num} \\
-        30D (90\%) & {\pThirtyP90Num} \\
+        1D (10\%)  & {\csname pOneP10Num\endcsname} \\
+        1D (90\%)  & {\csname pOneP90Num\endcsname} \\
+        7D (10\%)  & {\csname pSevenP10Num\endcsname} \\
+        7D (90\%)  & {\csname pSevenP90Num\endcsname} \\
+        30D (10\%) & {\csname pThirtyP10Num\endcsname} \\
+        30D (90\%) & {\csname pThirtyP90Num\endcsname} \\
         \bottomrule
       \end{tabular}
       }
