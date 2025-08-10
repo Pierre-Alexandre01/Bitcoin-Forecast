@@ -61,43 +61,42 @@ jobs:
           name: btc-forecast-outputs
           path: report/outputs/**
 
-      - name: Push to Overleaf (publish report + figures)
-        env:
-          OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
-        shell: bash
-        run: |
-          # be strict, but don't fail on unset because the secret might be missing
-          set -eo pipefail
+- name: Push to Overleaf (publish report + figures)
+  if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
+  env:
+    OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
+  shell: bash
+  run: |
+    # be strict, but don't die on missing secret
+    set -eo pipefail
 
-          # default the env var so nounset isn't a problem
-          OVERLEAF_URL="${OVERLEAF_URL:-}"
-          if [ -z "$OVERLEAF_URL" ]; then
-            echo "OVERLEAF_GIT_URL not set; skipping Overleaf publish."
-            exit 0
-          fi
-          echo "::add-mask::${OVERLEAF_URL}"
+    url="${OVERLEAF_URL:-}"
+    if [ -z "$url" ]; then
+      echo "OVERLEAF_GIT_URL not set; skipping Overleaf publish."
+      exit 0
+    fi
+    echo "::add-mask::$url"
 
-          tmp="$(mktemp -d)"
-          # 1) Clone the current Overleaf head
-          git clone --depth 1 "$OVERLEAF_URL" "$tmp/overleaf"
+    tmp="$(mktemp -d)"
+    git clone --depth 1 "$url" "$tmp/overleaf"
 
-          # 2) Copy our freshly built report into the clone (keep it tidy)
-          rsync -a --delete --exclude ".git" report/ "$tmp/overleaf/"
+    # sync our built report into the clone
+    rsync -a --delete --exclude ".git" report/ "$tmp/overleaf/"
 
-          # 3) Commit & push on top of the current head
-          cd "$tmp/overleaf"
-          git config user.name  "GitHub Actions"
-          git config user.email "actions@users.noreply.github.com"
+    cd "$tmp/overleaf"
+    git config user.name  "GitHub Actions"
+    git config user.email "actions@users.noreply.github.com"
 
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-            echo "No changes to publish."
-            exit 0
-          fi
+    # nothing to commit? then we're done
+    if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+      echo "No changes to publish."
+      exit 0
+    fi
 
-          git add -A
-          ts=$(date -u +%Y-%m-%dT%H:%MZ)
-          git commit -m "Auto-publish ${ts}"
-          git push origin master
+    git add -A
+    ts=$(date -u +%Y-%m-%dT%H:%MZ)
+    git commit -m "Auto-publish ${ts}"
+    git push origin HEAD:master
 
           git branch -M master
           git remote add overleaf "$url"
