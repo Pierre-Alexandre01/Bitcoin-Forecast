@@ -2,7 +2,7 @@ name: Daily Bitcoin Forecast
 
 on:
   schedule:
-    - cron: '17 6 * * *'   # every day at 06:17 UTC
+    - cron: '17 6 * * *' # every day at 06:17 UTC
   workflow_dispatch:
   push:
     branches: [ main ]
@@ -94,7 +94,3 @@ jobs:
           ts=$(date -u +%Y-%m-%dT%H:%MZ)
           git commit -m "Auto-publish ${ts}"
           git push origin HEAD:master
-
-          git branch -M master
-          git remote add overleaf "$url"
-          git push -f overleaf master
