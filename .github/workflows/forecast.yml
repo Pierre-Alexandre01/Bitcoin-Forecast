@@ -46,3 +46,11 @@ jobs:
         with:
           name: btc-forecast-outputs
           path: outputs/**
+
+      - name: Push to Overleaf
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@users.noreply.github.com"
+          git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
+          git fetch overleaf || true
+          git push overleaf main --force
