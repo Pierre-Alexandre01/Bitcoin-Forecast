@@ -2,7 +2,7 @@ name: Daily Bitcoin Forecast
 
 on:
   schedule:
-    - cron: "17 6 * * *"   # every day at 06:17 UTC
+    - cron: '17 6 * * *'   # every day at 06:17 UTC
   workflow_dispatch:
   push:
     branches: [ main ]
@@ -20,7 +20,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -42,7 +42,6 @@ jobs:
       - name: Run forecast (generates report/inputs.tex + PNGs)
         run: python -u bitcoin_forecast.py
 
-      # Compile the Beamer report that includes report/inputs.tex and images in report/outputs/
       - name: Compile Beamer PDF
         uses: xu-cheng/latex-action@v3
         with:
@@ -50,7 +49,6 @@ jobs:
           working_directory: report
           latexmk_use_xelatex: true
 
-      # Artifacts for download from the Actions page
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
@@ -63,27 +61,27 @@ jobs:
           name: btc-forecast-outputs
           path: report/outputs/**
 
-     - name: Push to Overleaf (publish report + figures)
-  if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
-  shell: bash
-  run: |
-    set -euo pipefail
-    url="${{ secrets.OVERLEAF_GIT_URL }}"
-    echo "::add-mask::$url"
+      - name: Push to Overleaf (publish report + figures)
+        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${{ secrets.OVERLEAF_GIT_URL }}"
+          echo "::add-mask::$url"
 
-    # stage the report folder (and the generated outputs inside it)
-    tmp="$(mktemp -d)"
-    cp -r report "$tmp/"
-    cd "$tmp/report"
+          # stage the report folder (and the generated outputs inside it)
+          tmp="$(mktemp -d)"
+          cp -r report "$tmp/"
+          cd "$tmp/report"
 
-    git init -q
-    git config user.name "GitHub Actions"
-    git config user.email "actions@users.noreply.github.com"
+          git init -q
+          git config user.name "GitHub Actions"
+          git config user.email "actions@users.noreply.github.com"
 
-    git add -A
-    ts=$(date -u +%Y-%m-%dT%H:%MZ)
-    git commit -m "Auto-publish ${ts}"
+          git add -A
+          ts=$(date -u +%Y-%m-%dT%H:%MZ)
+          git commit -m "Auto-publish ${ts}"
 
-    git branch -M master
-    git remote add overleaf "$url"
-    git push -f overleaf master
+          git branch -M master
+          git remote add overleaf "$url"
+          git push -f overleaf master
