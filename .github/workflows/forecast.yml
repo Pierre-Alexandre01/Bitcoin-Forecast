@@ -63,19 +63,24 @@ jobs:
           name: btc-forecast-outputs
           path: report/outputs/**
 
-      # OPTIONAL: push the compiled report + figures to Overleaf (paid Overleaf Git-Bridge)
       - name: Push to Overleaf (publish report + figures)
-        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         run: |
-          set -e
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@users.noreply.github.com"
-          rm -rf /tmp/overleaf && mkdir -p /tmp/overleaf
-          cp -r report /tmp/overleaf/
-          cd /tmp/overleaf
-          git init
-          git add -A
-          git commit -m "Auto-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
+          if [ -n "${{ secrets.OVERLEAF_GIT_URL }}" ]; then
+            set -e
+            git config --global user.name "GitHub Actions"
+            git config --global user.email "actions@users.noreply.github.com"
+            rm -rf /tmp/overleaf && mkdir -p /tmp/overleaf
+            cp -r report /tmp/overleaf/
+            cd /tmp/overleaf
+            git init
+            git add -A
+            git commit -m "Auto-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git branch -M master
+            git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
+            git push -f overleaf master
+          else
+            echo "OVERLEAF_GIT_URL secret not set — skipping push."
+          fito-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
           git branch -M master
           git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
           git push -f overleaf master
