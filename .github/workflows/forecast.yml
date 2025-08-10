@@ -2,7 +2,7 @@ name: Daily Bitcoin Forecast
 
 on:
   schedule:
-    - cron: '17 6 * * *' # every day at 06:17 UTC
+    - cron: '17 6 * * *'   # every day at 06:17 UTC
   workflow_dispatch:
   push:
     branches: [ main ]
@@ -42,8 +42,8 @@ jobs:
       - name: Run forecast (generates report/inputs.tex + PNGs)
         env:
           USE_FINBERT: 'false'
-          USE_GNEWS: 'false'   # CI often blocks this
-          USE_REDDIT: 'false'  # reddit RSS is flaky on CI
+          USE_GNEWS: 'false'    # CI can block this
+          USE_REDDIT: 'false'   # reddit RSS is flaky on CI
           USE_RSS: 'true'
           USE_GDELT: 'true'
           SCRAPE_DAYS: '30'
@@ -51,27 +51,29 @@ jobs:
 
       - name: Verify generated report assets
         run: |
-          echo "Tree under report/:"
+          echo "== repo root =="
+          ls -lah
+          echo "== report/ =="
           ls -lah report || true
-          echo "Tree under report/outputs/:"
+          echo "== report/outputs/ =="
           ls -lah report/outputs || true
 
-          test -f report/inputs.tex || (echo "❌ inputs.tex missing -> forecast step failed"; exit 1)
-          test -f report/outputs/fig_price_forecast.png || (echo "❌ fig_price_forecast.png missing"; exit 1)
-
+          # Hard checks (fail early if missing)
+          test -f report/inputs.tex || (echo "❌ report/inputs.tex missing"; exit 1)
+          test -f report/outputs/fig_price_forecast.png || (echo "❌ report/outputs/fig_price_forecast.png missing"; exit 1)
 
       - name: Compile Beamer PDF (XeLaTeX)
         uses: xu-cheng/latex-action@v3
         with:
+          # We compile from REPO ROOT (no working_directory)
           root_file: main.tex
-          working_directory: report
           latexmk_use_xelatex: true
 
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-forecast-report
-          path: report/main.pdf
+          path: main.pdf   # emitted in repo root when compiling main.tex in root
 
       - name: Upload outputs (PNGs/JSON/CSVs)
         uses: actions/upload-artifact@v4
