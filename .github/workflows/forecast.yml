@@ -62,18 +62,14 @@ jobs:
           path: report/outputs/**
 
       - name: Push to Overleaf (publish report + figures)
-        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         env:
           OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
+        if: ${{ env.OVERLEAF_URL != '' }}
         shell: bash
         run: |
           set -eo pipefail
 
-          url="${OVERLEAF_URL:-}"
-          if [ -z "$url" ]; then
-            echo "OVERLEAF_GIT_URL not set; skipping Overleaf publish."
-            exit 0
-          fi
+          url="${OVERLEAF_URL}"
           echo "::add-mask::$url"
 
           tmp="$(mktemp -d)"
