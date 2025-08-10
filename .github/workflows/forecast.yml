@@ -67,25 +67,17 @@ jobs:
           dos2unix main.tex || true
           dos2unix report/inputs.tex || true
 
-      - name: Compile Beamer PDF (XeLaTeX, from repo root)
+      - name: Compile Beamer PDF (XeLaTeX)
         uses: xu-cheng/latex-action@v3
         with:
-          root_file: main.tex
+          root_file: report/main.tex
           latexmk_use_xelatex: true
-          # sanity check inside the container before compiling
-          pre_compile: |
-            echo "Container sees:"
-            ls -lah
-            echo "Container sees report/:"
-            ls -lah report || true
-            echo "kpsewhich report/inputs.tex ->"
-            kpsewhich report/inputs.tex || true
-
+      
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-forecast-report
-          path: main.pdf
+          path: report/main.pdf
 
       - name: Upload outputs (PNGs/JSON/CSVs)
         uses: actions/upload-artifact@v4
