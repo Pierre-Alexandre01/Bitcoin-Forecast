@@ -70,8 +70,8 @@ jobs:
       - name: Compile Beamer PDF (XeLaTeX)
         uses: xu-cheng/latex-action@v3
         with:
-          root_file: main.tex        # <- compile the root main.tex
-          working_directory: .       # (default, can omit)
+          root_file: main.tex
+          working_directory: report
           latexmk_use_xelatex: true
 
       - name: Upload PDF
