@@ -17,6 +17,7 @@
 % ---- Packages ----------------------------------------------------------------
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{adjustbox}
 \usepackage{siunitx}
 \sisetup{
   detect-all,
@@ -93,20 +94,25 @@
 \end{frame}
 
 % --- Charts -------------------------------------------------------------------
-\begin{frame}{Price vs Sentiment}
+\begin{frame}[plain]{Price vs Sentiment}
   \centering
-  \includegraphics[height=0.75\textheight]{fig_price_sent.png}
+  \adjustbox{max width=\textwidth, max height=0.82\textheight, center}{
+    \includegraphics{fig_price_sent.png}
+  }
 \end{frame}
 
-\begin{frame}{Forecast Intervals (10--90\%)}
+\begin{frame}[plain]{Forecast Intervals (10--90\%)}
   \centering
-  \includegraphics[height=0.75\textheight]{fig_intervals.png}
+  \adjustbox{max width=\textwidth, max height=0.82\textheight, center}{
+    \includegraphics{fig_intervals.png}
+  }
 \end{frame}
 
-% (optional) Volatility fit
-\begin{frame}{Next‑day Realized Variance (HAR‑lite)}
+\begin{frame}[plain]{Next‑day Realized Variance (HAR‑lite)}
   \centering
-  \includegraphics[height=0.75\textheight]{fig_rv.png}
+  \adjustbox{max width=\textwidth, max height=0.82\textheight, center}{
+    \includegraphics{fig_rv.png}
+  }
 \end{frame}
 
 \end{document}
