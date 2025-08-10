@@ -62,14 +62,17 @@ jobs:
           path: report/outputs/**
 
       - name: Push to Overleaf (publish report + figures)
-        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         env:
           OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
         shell: bash
         run: |
           set -euo pipefail
-          url="$OVERLEAF_URL"
-          echo "::add-mask::$url"
+          if [ -z "${OVERLEAF_URL:-}" ]; then
+            echo "OVERLEAF_GIT_URL not set; skipping Overleaf publish."
+            exit 0
+          fi
+
+          echo "::add-mask::${OVERLEAF_URL}"
 
           tmp="$(mktemp -d)"
           cp -r report "$tmp/"
@@ -84,7 +87,7 @@ jobs:
           git commit -m "Auto-publish ${ts}"
 
           git branch -M master
-          git remote add overleaf "$url"
+          git remote add overleaf "${OVERLEAF_URL}"
           git push -f overleaf master
 
           git branch -M master
