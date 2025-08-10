@@ -374,37 +374,151 @@ for col in ["n", "pos_share", "neg_share", "pos_mean", "neg_mean", "sent_balance
         data[col] = data[col].fillna(method="ffill", limit=3)
 
 # =============================================================================
-# 5) DIRECTION MODEL (LOGIT) — UNCHANGED
+# 5) DIRECTION MODEL — features + calibrated ensemble + walk‑forward OOS
 # =============================================================================
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.impute import SimpleImputer
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import brier_score_loss, roc_auc_score
 
+# ---- Feature engineering (self-contained in this block) ----------------------
 fe = data.copy()
+
+# price momentum
+fe["mom_5"]  = fe["Adj Close"].pct_change(5)
+fe["mom_20"] = fe["Adj Close"].pct_change(20)
+
+# RSI(14)
+delta = fe["Adj Close"].diff()
+up   = delta.clip(lower=0)
+down = -delta.clip(upper=0)
+roll = 14
+rs = up.rolling(roll).mean() / (down.rolling(roll).mean() + 1e-12)
+fe["rsi14"] = 100 - (100 / (1 + rs))
+
+# realized-variance regime features
+fe["rv"] = fe["ret"] ** 2
+fe["rv_ema5"]  = fe["rv"].ewm(span=5,  min_periods=5).mean()
+fe["rv_ema22"] = fe["rv"].ewm(span=22, min_periods=22).mean()
+fe["rv_ratio"] = fe["rv_ema5"] / (fe["rv_ema22"] + 1e-12)
+
+# sentiment features
+fe["sent_ewm7"] = fe["sent_balance"].ewm(span=7, min_periods=3).mean()
 fe["sent_lag1"] = fe["sent_balance"].shift(1)
+
+# return lag (kept from your original)
 fe["ret_lag1"] = fe["ret"].shift(1)
+
+# target must exist
 fe = fe.dropna(subset=["up_next"]).copy()
 
-feat_cols = [c for c in ["sent_lag1", "ret_lag1", "pos_share", "neg_share"] if c in fe.columns]
-feat_cols = [c for c in feat_cols if fe[c].notna().any()]
+# the feature set we’ll use
+dir_cols = [
+    "ret_lag1", "mom_5", "mom_20", "rsi14",
+    "rv_ratio", "rv_ema5", "rv_ema22",
+    "sent_lag1", "sent_ewm7"
+]
+dir_cols = [c for c in dir_cols if c in fe.columns]
+fe = fe.dropna(subset=dir_cols).copy()
 
-if len(fe) < 20 or len(feat_cols) == 0 or fe["up_next"].nunique() < 2:
+if len(fe) < 80 or fe["up_next"].nunique() < 2:
     p_up_1d = 0.5
-    dir_model_name = "heuristic"
+    dir_model_name = "heuristic (not enough data)"
+    print("[dir] Not enough data; falling back to 0.50.")
 else:
-    X = fe[feat_cols].to_numpy()
-    y = fe["up_next"].astype(int).to_numpy()
-    pipe_dir = Pipeline([
+    X_all = fe[dir_cols].to_numpy()
+    y_all = fe["up_next"].astype(int).to_numpy()
+
+    # --- Walk-forward OOS evaluation (expanding window) ----------------------
+    min_train = max(60, int(0.4 * len(fe)))  # start after we have some history
+    cal_tail  = 30                           # last N of train used to calibrate
+    p_oos_logit = np.full(len(fe), np.nan, float)
+    p_oos_gb    = np.full(len(fe), np.nan, float)
+
+    for t in range(min_train, len(fe) - 1):
+        train_idx = np.arange(0, t)         # [0 .. t-1]
+        test_idx  = np.array([t])           # predict t
+
+        if len(train_idx) <= cal_tail + 10:
+            continue
+
+        core_idx  = train_idx[:-cal_tail]
+        calib_idx = train_idx[-cal_tail:]
+
+        X_tr_core, y_tr_core = X_all[core_idx],  y_all[core_idx]
+        X_tr_cal,  y_tr_cal  = X_all[calib_idx], y_all[calib_idx]
+        X_te = X_all[test_idx]
+
+        # Model A: regularized Logistic + Platt calibration
+        logit_pipe = Pipeline([
+            ("imputer", SimpleImputer(strategy="mean")),
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=1000, class_weight="balanced", C=1.0)),
+        ])
+        logit_pipe.fit(X_tr_core, y_tr_core)
+        logit_cal = CalibratedClassifierCV(logit_pipe, method="sigmoid", cv="prefit")
+        logit_cal.fit(X_tr_cal, y_tr_cal)
+        p_oos_logit[test_idx] = logit_cal.predict_proba(X_te)[:, 1]
+
+        # Model B: Gradient Boosting + isotonic calibration
+        gb = GradientBoostingClassifier(
+            n_estimators=300, learning_rate=0.03, max_depth=3, subsample=0.7, random_state=42
+        )
+        gb.fit(X_tr_core, y_tr_core)
+        gb_cal = CalibratedClassifierCV(gb, method="isotonic", cv="prefit")
+        gb_cal.fit(X_tr_cal, y_tr_cal)
+        p_oos_gb[test_idx] = gb_cal.predict_proba(X_te)[:, 1]
+
+    # Simple average ensemble of calibrated probs
+    p_oos = np.nanmean(np.c_[p_oos_logit, p_oos_gb], axis=1)
+    mask = ~np.isnan(p_oos)
+    if mask.sum() > 20:
+        brier = brier_score_loss(y_all[mask], p_oos[mask])
+        auc   = roc_auc_score(y_all[mask], p_oos[mask])
+        print(f"[dir] Walk‑forward OOS: Brier={brier:.3f}, AUC={auc:.3f}")
+    else:
+        print("[dir] Not enough OOS points to score.")
+
+    # --- Fit final models on full sample (with tail for calibration) ----------
+    core_idx  = np.arange(0, len(fe) - cal_tail)
+    calib_idx = np.arange(len(fe) - cal_tail, len(fe))
+    X_core, y_core = X_all[core_idx],  y_all[core_idx]
+    X_cal,  y_cal  = X_all[calib_idx], y_all[calib_idx]
+    X_next = fe.iloc[[-1]][dir_cols].to_numpy()
+
+    logit_pipe = Pipeline([
         ("imputer", SimpleImputer(strategy="mean")),
         ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(max_iter=1000, class_weight="balanced")),
-    ])
-    pipe_dir.fit(X, y)
-    x_next = fe.iloc[[-1]][feat_cols].to_numpy()
-    p_up_1d = float(pipe_dir.predict_proba(x_next)[:, 1])
-    p_up_1d = float(np.clip(p_up_1d, 0.05, 0.95))
-    dir_model_name = "Logit(balanced)"
+        ("clf", LogisticRegression(max_iter=1000, class_weight="balanced", C=1.0)),
+    ]).fit(X_core, y_core)
+    logit_cal = CalibratedClassifierCV(logit_pipe, method="sigmoid", cv="prefit").fit(X_cal, y_cal)
+    p_next_logit = float(logit_cal.predict_proba(X_next)[:, 1])
+
+    gb = GradientBoostingClassifier(
+        n_estimators=300, learning_rate=0.03, max_depth=3, subsample=0.7, random_state=42
+    ).fit(X_core, y_core)
+    gb_cal = CalibratedClassifierCV(gb, method="isotonic", cv="prefit").fit(X_cal, y_cal)
+    p_next_gb = float(gb_cal.predict_proba(X_next)[:, 1])
+
+    # Ensemble probability (clipped for sanity)
+    p_up_1d = float(np.clip(0.5 * (p_next_logit + p_next_gb), 0.05, 0.95))
+    dir_model_name = "Ensemble(Logit+GB, calibrated)"
+
+    # Optional: feature importance figure (GB only)
+    try:
+        fi = pd.Series(gb.feature_importances_, index=dir_cols).sort_values(ascending=False)
+        fig, ax = plt.subplots(figsize=(7.5, 4))
+        fi.iloc[::-1].plot(kind="barh", ax=ax)
+        ax.set_title("Direction: Gradient Boosting feature importance")
+        ax.grid(True, axis="x", alpha=0.25)
+        fig.tight_layout()
+        fig.savefig(os.path.join(REPORT_OUT, "fig_dir_feature_importance.png"), dpi=160)
+        plt.close(fig)
+    except Exception as e:
+        print("[dir] could not render feature importance:", e)
 
 print(f"\nDirection P(up) via {dir_model_name}: {p_up_1d:.3f}")
 
