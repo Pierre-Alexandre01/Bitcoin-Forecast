@@ -667,6 +667,114 @@ try:
 except Exception as e:
     print("[warn] could not render intervals figure:", e)
 
+# (D) Direction model reliability (time-series CV) + ROC
+try:
+    from sklearn.model_selection import TimeSeriesSplit
+    from sklearn.metrics import brier_score_loss, roc_auc_score, RocCurveDisplay
+
+    # Prepare features/labels again (same as training)
+    fe_cv = data.copy()
+    fe_cv["sent_lag1"] = fe_cv["sent_balance"].shift(1)
+    fe_cv["ret_lag1"] = fe_cv["ret"].shift(1)
+    fe_cv = fe_cv.dropna(subset=["up_next"]).copy()
+    feat_cols = [c for c in ["sent_lag1", "ret_lag1", "pos_share", "neg_share"] if c in fe_cv.columns]
+    feat_cols = [c for c in feat_cols if fe_cv[c].notna().any()]
+    if len(fe_cv) >= 40 and len(feat_cols) > 0 and fe_cv["up_next"].nunique() == 2:
+        X_all = fe_cv[feat_cols].to_numpy()
+        y_all = fe_cv["up_next"].astype(int).to_numpy()
+
+        tscv = TimeSeriesSplit(n_splits=5)
+        proba_hat = np.full_like(y_all, fill_value=np.nan, dtype=float)
+
+        for train_idx, test_idx in tscv.split(X_all):
+            X_tr, X_te = X_all[train_idx], X_all[test_idx]
+            y_tr = y_all[train_idx]
+            pipe = Pipeline([
+                ("imputer", SimpleImputer(strategy="mean")),
+                ("scaler", StandardScaler()),
+                ("clf", LogisticRegression(max_iter=1000, class_weight="balanced")),
+            ])
+            pipe.fit(X_tr, y_tr)
+            proba_hat[test_idx] = pipe.predict_proba(X_te)[:, 1]
+
+        mask = ~np.isnan(proba_hat)
+        y_use = y_all[mask]
+        p_use = proba_hat[mask]
+
+        # Metrics
+        brier = brier_score_loss(y_use, p_use)
+        auc   = roc_auc_score(y_use, p_use)
+        print(f"[cv] Direction calibration: Brier={brier:.3f}, AUC={auc:.3f}")
+
+        # Reliability curve (10 bins)
+        bins = np.linspace(0, 1, 11)
+        idx  = np.digitize(p_use, bins) - 1
+        bin_centers, obs_rate = [], []
+        for b in range(10):
+            sel = (idx == b)
+            if sel.any():
+                bin_centers.append(0.5 * (bins[b] + bins[b+1]))
+                obs_rate.append(y_use[sel].mean())
+
+        fig, ax = plt.subplots(figsize=(7.5, 4))
+        ax.plot([0,1],[0,1], ls="--", lw=1, label="Perfect")
+        ax.plot(bin_centers, obs_rate, marker="o", lw=2, label="Observed")
+        ax.set_xlabel("Forecast P(Up)")
+        ax.set_ylabel("Observed up-rate")
+        ax.set_title(f"Direction calibration (TS-CV)  •  Brier={brier:.3f}, AUC={auc:.3f}")
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="lower right")
+        fig.tight_layout()
+        fig.savefig(os.path.join(REPORT_OUT, "fig_dir_reliability.png"), dpi=160)
+        plt.close(fig)
+
+        # ROC curve
+        fig, ax = plt.subplots(figsize=(7.5, 4))
+        RocCurveDisplay.from_predictions(y_use, p_use, ax=ax)
+        ax.set_title(f"Direction ROC (TS-CV)  •  AUC={auc:.3f}")
+        ax.grid(True, alpha=0.25)
+        fig.tight_layout()
+        fig.savefig(os.path.join(REPORT_OUT, "fig_dir_roc.png"), dpi=160)
+        plt.close(fig)
+    else:
+        print("[cv] Not enough data/labels for reliability plot.")
+except Exception as e:
+    print("[warn] could not render direction reliability/ROC:", e)
+
+# (E) News mix over the last 14 days (stacked bars)
+try:
+    days_back = 14
+    cutoff = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=days_back)
+    df_recent = df.copy()
+    df_recent = df_recent[df_recent["date_utc"] >= cutoff]
+
+    if not df_recent.empty:
+        df_recent["day"] = df_recent["date_utc"].dt.floor("D")
+        mix = (
+            df_recent.groupby(["day","source_cat"])
+                     .size().unstack(fill_value=0)[["news","reddit","other"]]
+                     if set(["news","reddit","other"]).issubset(df_recent["source_cat"].unique())
+                     else df_recent.groupby(["day","source_cat"]).size().unstack(fill_value=0)
+        ).sort_index()
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        bottom = np.zeros(len(mix))
+        for col in mix.columns:
+            ax.bar(mix.index, mix[col].values, bottom=bottom, label=col)
+            bottom += mix[col].values
+        ax.set_title(f"Headline mix by source (last {days_back} days)")
+        ax.set_ylabel("# items")
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.legend(loc="upper left", ncols=3, frameon=False)
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        fig.savefig(os.path.join(REPORT_OUT, "fig_news_mix.png"), dpi=160)
+        plt.close(fig)
+    else:
+        print("[mix] No recent headlines to plot.")
+except Exception as e:
+    print("[warn] could not render news mix:", e)
+
 # =============================================================================
 # 10) WRITE LaTeX INPUTS — UNCHANGED (keeps \csname…\endcsname style)
 # =============================================================================
