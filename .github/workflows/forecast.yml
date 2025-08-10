@@ -70,7 +70,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-forecast-report
-          path: report/main.pdf
+          path: main.pdf
 
       - name: Upload outputs (PNGs/JSON/CSVs)
         uses: actions/upload-artifact@v4
