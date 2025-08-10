@@ -63,24 +63,27 @@ jobs:
           name: btc-forecast-outputs
           path: report/outputs/**
 
-      - name: Push to Overleaf (publish report + figures)
-        run: |
-          if [ -n "${{ secrets.OVERLEAF_GIT_URL }}" ]; then
-            set -e
-            git config --global user.name "GitHub Actions"
-            git config --global user.email "actions@users.noreply.github.com"
-            rm -rf /tmp/overleaf && mkdir -p /tmp/overleaf
-            cp -r report /tmp/overleaf/
-            cd /tmp/overleaf
-            git init
-            git add -A
-            git commit -m "Auto-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git branch -M master
-            git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
-            git push -f overleaf master
-          else
-            echo "OVERLEAF_GIT_URL secret not set — skipping push."
-          fito-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git branch -M master
-          git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
-          git push -f overleaf master
+     - name: Push to Overleaf (publish report + figures)
+  if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
+  shell: bash
+  run: |
+    set -euo pipefail
+    url="${{ secrets.OVERLEAF_GIT_URL }}"
+    echo "::add-mask::$url"
+
+    # stage the report folder (and the generated outputs inside it)
+    tmp="$(mktemp -d)"
+    cp -r report "$tmp/"
+    cd "$tmp/report"
+
+    git init -q
+    git config user.name "GitHub Actions"
+    git config user.email "actions@users.noreply.github.com"
+
+    git add -A
+    ts=$(date -u +%Y-%m-%dT%H:%MZ)
+    git commit -m "Auto-publish ${ts}"
+
+    git branch -M master
+    git remote add overleaf "$url"
+    git push -f overleaf master
