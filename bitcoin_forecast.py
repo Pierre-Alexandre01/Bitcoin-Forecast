@@ -453,6 +453,48 @@ rv_plot = pd.DataFrame({
     "rv_pred": yhat_all
 }, index=har.index)
 
+# ---- Multi-step volatility forecast (roll the HAR-lite state forward) ----
+FUTURE_DAYS = int(os.getenv("VOL_FUTURE_DAYS", "10"))  # tweak via env if you like
+
+# EWMA update coefficients (because you used ewm(span=...))
+alpha5  = 2.0 / (5  + 1)   # = 1/3
+alpha22 = 2.0 / (22 + 1)   # = 2/23
+
+# last observed state of the lags
+state = {
+    "rv_d_lag1": float(har["rv"].iloc[-1]),
+    "rv_w_lag1": float(har["rv_ema5"].iloc[-1]),
+    "rv_m_lag1": float(har["rv_ema22"].iloc[-1]),
+}
+
+rv_fc = []
+for _ in range(FUTURE_DAYS):
+    Xf = np.array([[state["rv_d_lag1"], state["rv_w_lag1"], state["rv_m_lag1"]]])
+    rv_next = float(np.exp(gb.predict(scaler_vol.transform(Xf))[0]))
+    rv_fc.append(rv_next)
+
+    # roll state forward using the EWMA recursions
+    state["rv_d_lag1"] = rv_next
+    state["rv_w_lag1"] = alpha5  * rv_next + (1 - alpha5)  * state["rv_w_lag1"]
+    state["rv_m_lag1"] = alpha22 * rv_next + (1 - alpha22) * state["rv_m_lag1"]
+
+sigma_fc = [math.sqrt(v) for v in rv_fc]
+
+rv_forecast = pd.DataFrame({
+    "date_day": pd.date_range(har.index[-1] + pd.Timedelta(days=1),
+                              periods=FUTURE_DAYS, freq="D", tz="UTC"),
+    "rv_pred": rv_fc,
+    "sigma_pred": sigma_fc,
+}).set_index("date_day")
+
+# (optional) save to CSV alongside other outputs
+try:
+    rv_forecast.reset_index().to_csv(
+        os.path.join(REPORT_OUT, f"vol_forecast_{stamp}.csv"), index=False
+    )
+except Exception:
+    pass
+
 # =============================================================================
 # 7) PRICE DISTRIBUTIONS — UNCHANGED
 # =============================================================================
@@ -565,12 +607,34 @@ try:
 except Exception as e:
     print("[warn] could not render price/sent figure:", e)
 
-# (B) RV true vs predicted (in-sample)
+# (B) RV true vs predicted (in-sample) + multi-day forecast
 try:
     fig, ax = plt.subplots(figsize=(10, 4))
+
+    # in-sample
     ax.plot(rv_plot.index, rv_plot["rv_true"], label="RV next (true)")
     ax.plot(rv_plot.index, rv_plot["rv_pred"], label="RV next (pred)", alpha=0.9)
-    ax.legend(); ax.set_title("Next-day realized variance — HAR-lite (in-sample)")
+
+    # forward forecast (dashed), plus light shading for the forecast window
+    if "rv_forecast" in locals() and not rv_forecast.empty:
+        ax.plot(rv_forecast.index, rv_forecast["rv_pred"],
+                linestyle="--", label=f"RV forecast (+{len(rv_forecast)}d)")
+        ax.axvspan(rv_forecast.index[0], rv_forecast.index[-1], alpha=0.08)
+
+        # also show daily sigma on a right axis (optional)
+        ax2 = ax.twinx()
+        ax2.plot(rv_forecast.index, rv_forecast["sigma_pred"],
+                 linestyle=":", label="σ forecast (daily)")
+        ax2.set_ylabel("σ (daily)")
+
+        # combined legend
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        fig.legend(h1 + h2, l1 + l2, loc="upper left", ncols=2, frameon=False)
+    else:
+        ax.legend(loc="upper left")
+
+    ax.set_title("Next-day realized variance — HAR-lite (in-sample) + multi-day forecast")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(os.path.join(REPORT_OUT, "fig_rv.png"), dpi=160)
