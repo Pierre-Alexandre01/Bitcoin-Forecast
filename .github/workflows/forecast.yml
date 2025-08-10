@@ -92,16 +92,25 @@ jobs:
           name: btc-forecast-outputs
           path: report/outputs/**
 
-      # OPTIONAL: supply token if your OVERLEAF_GIT_URL secret does NOT include it
-      - name: Configure Overleaf credentials
-        if: ${{ secrets.OVERLEAF_GIT_URL != '' && secrets.OVERLEAF_TOKEN != '' }}
+        # OPTIONAL: configure credentials only if BOTH secrets are set
+      - name: Configure Overleaf credentials (optional)
         run: |
-          git config --global credential.helper store
-          printf "https://git:%s@git.overleaf.com\n" "${{ secrets.OVERLEAF_TOKEN }}" > ~/.git-credentials
+          if [ -n "${{ secrets.OVERLEAF_GIT_URL }}" ] && [ -n "${{ secrets.OVERLEAF_TOKEN }}" ]; then
+            echo "Configuring Overleaf credentials..."
+            git config --global credential.helper store
+            printf "https://git:%s@git.overleaf.com\n" "${{ secrets.OVERLEAF_TOKEN }}" > ~/.git-credentials
+          else
+            echo "Skipping credential config (missing OVERLEAF_GIT_URL or OVERLEAF_TOKEN)."
+          fi
 
+      # OPTIONAL: push report to Overleaf if URL secret exists (token may be inside URL or from the previous step)
       - name: Push to Overleaf (publish report + figures)
-        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         run: |
+          if [ -z "${{ secrets.OVERLEAF_GIT_URL }}" ]; then
+            echo "Skipping Overleaf push (OVERLEAF_GIT_URL not set)."
+            exit 0
+          fi
+
           set -e
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@users.noreply.github.com"
