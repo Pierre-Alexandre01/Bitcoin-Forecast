@@ -47,10 +47,22 @@ jobs:
           name: btc-forecast-outputs
           path: outputs/**
 
-      - name: Push to Overleaf
+           - name: Push to Overleaf (publish report + figures)
         run: |
+          set -e
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@users.noreply.github.com"
+          # Add the Overleaf remote (stored as a secret)
           git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
-          git fetch overleaf || true
-          git push overleaf main --force
+          # Create a temporary tree with only the report and outputs
+          rm -rf /tmp/overleaf && mkdir -p /tmp/overleaf
+          cp -r report /tmp/overleaf/
+          cp -r outputs /tmp/overleaf/
+          cd /tmp/overleaf
+          git init
+          git add -A
+          git commit -m "Auto-publish $(date -u +'%Y-%m-%d %H:%M UTC')"
+          # Overleaf’s default branch is usually 'master'
+          git branch -M master
+          git remote add overleaf "${{ secrets.OVERLEAF_GIT_URL }}"
+          git push -f overleaf master
