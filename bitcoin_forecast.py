@@ -1,4 +1,4 @@
-# bitcoin_forecast.py
+# bitcoin_forecast.py 
 # Action-safe Bitcoin forecast pipeline (daily, headless)
 # - Collects Bitcoin headlines (Google News + Reddit RSS)
 # - Scores sentiment (VADER)
