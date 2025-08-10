@@ -58,27 +58,30 @@ jobs:
           test -f report/inputs.tex || (echo "❌ report/inputs.tex missing"; exit 1)
           test -f report/outputs/fig_price_forecast.png || (echo "❌ fig_price_forecast.png missing"; exit 1)
 
+      - name: Verify LaTeX root exists
+        run: |
+          ls -lah .
+          test -f main.tex || (echo "❌ main.tex not found at repo root"; exit 1)
+
       - name: Ensure LF line endings (avoid ^^M)
         run: |
           sudo apt-get update -y
           sudo apt-get install -y dos2unix
-          # Only the root main.tex should exist; remove any duplicate in report/
-          [ -f report/main.tex ] && rm -f report/main.tex || true
           dos2unix main.tex || true
           dos2unix report/inputs.tex || true
 
       - name: Compile Beamer PDF (XeLaTeX)
         uses: xu-cheng/latex-action@v3
         with:
-          root_file: main.tex
-          working_directory: report
+          root_file: main.tex          # compile FROM repo root
+          working_directory: .         # important: do NOT set to 'report'
           latexmk_use_xelatex: true
 
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-forecast-report
-          path: main.pdf                 # <-- PDF is created next to main.tex
+          path: main.pdf               # PDF is next to main.tex
 
       - name: Upload outputs (PNGs/JSON/CSVs)
         uses: actions/upload-artifact@v4
