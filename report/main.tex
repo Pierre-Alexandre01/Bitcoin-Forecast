@@ -36,7 +36,7 @@
 % Metadata
 \title{Bitcoin Investment Proposal}
 \author{Pierre-Alexandre Crouzet / Desk}
-\date{\reportDate}
+\date{\csname reportDate\endcsname}
 
 % figures live in report/outputs relative to main.tex
 \graphicspath{{./outputs/}}
@@ -55,13 +55,16 @@
   \vspace{2mm}
   \begin{columns}[T,onlytextwidth]
     \column{0.58\textwidth}
-      \begin{itemize}
-        \item Spot: \textbf{\$ \spotUSD}
-        \item P(up) tomorrow: \textbf{\probUpOneDay\%}
-        \item 1D median: \textbf{\$ \pOneMed} (10--90\%: \csname pOneP10\endcsname--\csname pOneP90\endcsname)
-        \item 7D median: \textbf{\$ \pSevenMed} (10--90\%: \csname pSevenP10\endcsname--\csname pSevenP90\endcsname)
-        \item 30D median: \textbf{\$ \pThirtyMed} (10--90\%: \csname pThirtyP10\endcsname--\csname pThirtyP90\endcsname)
-      \end{itemize}
+    \begin{itemize}
+      \item Spot: \textbf{\$ \csname spotUSD\endcsname}
+      \item P(up) tomorrow: \textbf{\csname probUpOneDay\endcsname\%}
+      \item 1D median: \textbf{\$ \csname pOneMed\endcsname}
+            (10--90\%: \csname pOneP10\endcsname--\csname pOneP90\endcsname)
+      \item 7D median: \textbf{\$ \csname pSevenMed\endcsname}
+            (10--90\%: \csname pSevenP10\endcsname--\csname pSevenP90\endcsname)
+      \item 30D median: \textbf{\$ \csname pThirtyMed\endcsname}
+            (10--90\%: \csname pThirtyP10\endcsname--\csname pThirtyP90\endcsname)
+    \end{itemize}
 
     \column{0.42\textwidth}
       {\small
