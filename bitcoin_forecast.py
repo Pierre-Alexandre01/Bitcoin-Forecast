@@ -65,7 +65,7 @@ from gnews import GNews
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
-SCRAPE_DAYS = 7
+SCRAPE_DAYS = 60
 QUERY_TOPIC = "Bitcoin"
 
 
