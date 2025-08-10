@@ -62,16 +62,15 @@ jobs:
           path: report/outputs/**
 
       - name: Push to Overleaf (publish report + figures)
+        if: ${{ secrets.OVERLEAF_GIT_URL != '' }}
         env:
           OVERLEAF_URL: ${{ secrets.OVERLEAF_GIT_URL }}
-        if: ${{ env.OVERLEAF_URL != '' }}
         shell: bash
         run: |
           set -euo pipefail
           url="$OVERLEAF_URL"
           echo "::add-mask::$url"
 
-          # stage the report folder (and the generated outputs inside it)
           tmp="$(mktemp -d)"
           cp -r report "$tmp/"
           cd "$tmp/report"
