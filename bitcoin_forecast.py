@@ -627,21 +627,20 @@ try:
                  linestyle=":", label="σ forecast (daily)")
         ax2.set_ylabel("σ (daily)")
 
-        # combined legend outside the plot
-h1, l1 = ax.get_legend_handles_labels()
-h2, l2 = ax2.get_legend_handles_labels()
-fig.legend(h1 + h2, l1 + l2,
-           loc="upper center",
-           bbox_to_anchor=(0.5, 1.15),
-           ncol=2,
-           frameon=False)
-fig.subplots_adjust(top=0.8)
+        # combined legend OUTSIDE plot area
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        fig.legend(h1 + h2, l1 + l2, loc="upper center", bbox_to_anchor=(0.5, 1.15),
+                   ncol=2, frameon=False)
+    else:
+        ax.legend(loc="upper left")
 
     ax.set_title("Next-day realized variance — HAR-lite (in-sample) + multi-day forecast")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(os.path.join(REPORT_OUT, "fig_rv.png"), dpi=160)
     plt.close(fig)
+
 except Exception as e:
     print("[warn] could not render RV figure:", e)
 
