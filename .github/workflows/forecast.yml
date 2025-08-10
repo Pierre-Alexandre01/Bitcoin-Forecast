@@ -2,7 +2,7 @@ name: Daily Bitcoin Forecast
 
 on:
   schedule:
-    - cron: '17 6 * * *'
+    - cron: '17 6 * * *' # every day at 06:17 UTC
   workflow_dispatch:
   push:
     branches: [ main ]
@@ -29,7 +29,6 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
@@ -38,50 +37,26 @@ jobs:
           import nltk
           nltk.download("vader_lexicon", quiet=True)
           PY
-
       - name: Run forecast (generates report/inputs.tex + PNGs)
-        env:
-          USE_FINBERT: 'false'
-          USE_GNEWS: 'false'
-          USE_REDDIT: 'false'
-          USE_RSS: 'true'
-          USE_GDELT: 'true'
-          SCRAPE_DAYS: '30'
         run: python -u bitcoin_forecast.py
 
-      - name: Verify generated report assets
-        run: |
-          echo "== report/ =="
-          ls -lah report || true
-          echo "== report/outputs/ =="
-          ls -lah report/outputs || true
-          test -f report/inputs.tex || (echo "❌ report/inputs.tex missing"; exit 1)
-          test -f report/outputs/fig_price_forecast.png || (echo "❌ fig_price_forecast.png missing"; exit 1)
+      - name: Run forecast
+        env:
+          USE_FINBERT: 'false'   # set to 'true' if you added transformers/torch
+        run: python -u bitcoin_forecast.py
 
-      - name: Verify LaTeX root exists
-        run: |
-          ls -lah .
-          test -f main.tex || (echo "❌ main.tex not found at repo root"; exit 1)
-
-      - name: Ensure LF line endings (avoid ^^M)
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y dos2unix
-          dos2unix main.tex || true
-          dos2unix report/inputs.tex || true
-
-      - name: Compile Beamer PDF (XeLaTeX)
+      - name: Compile Beamer PDF
         uses: xu-cheng/latex-action@v3
         with:
-          root_file: main.tex          # compile FROM repo root
-          working_directory: .         # important: do NOT set to 'report'
+          root_file: main.tex
+          working_directory: report
           latexmk_use_xelatex: true
 
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-forecast-report
-          path: main.pdf               # PDF is next to main.tex
+          path: report/main.pdf
 
       - name: Upload outputs (PNGs/JSON/CSVs)
         uses: actions/upload-artifact@v4
