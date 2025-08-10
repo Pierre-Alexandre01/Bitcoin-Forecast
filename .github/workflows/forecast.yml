@@ -2,7 +2,7 @@ name: Daily Bitcoin Forecast
 
 on:
   schedule:
-    - cron: '17 6 * * *'   # every day at 06:17 UTC
+    - cron: '17 6 * * *'
   workflow_dispatch:
   push:
     branches: [ main ]
@@ -42,8 +42,8 @@ jobs:
       - name: Run forecast (generates report/inputs.tex + PNGs)
         env:
           USE_FINBERT: 'false'
-          USE_GNEWS: 'false'    # CI can block this
-          USE_REDDIT: 'false'   # reddit RSS is flaky on CI
+          USE_GNEWS: 'false'
+          USE_REDDIT: 'false'
           USE_RSS: 'true'
           USE_GDELT: 'true'
           SCRAPE_DAYS: '30'
@@ -51,29 +51,41 @@ jobs:
 
       - name: Verify generated report assets
         run: |
-          echo "== repo root =="
-          ls -lah
           echo "== report/ =="
           ls -lah report || true
           echo "== report/outputs/ =="
           ls -lah report/outputs || true
-
-          # Hard checks (fail early if missing)
           test -f report/inputs.tex || (echo "❌ report/inputs.tex missing"; exit 1)
-          test -f report/outputs/fig_price_forecast.png || (echo "❌ report/outputs/fig_price_forecast.png missing"; exit 1)
+          test -f report/outputs/fig_price_forecast.png || (echo "❌ fig_price_forecast.png missing"; exit 1)
 
-      - name: Compile Beamer PDF (XeLaTeX)
+      - name: Ensure LF line endings (avoid ^^M)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y dos2unix
+          # Only the root main.tex should exist; remove any duplicate in report/
+          [ -f report/main.tex ] && rm -f report/main.tex || true
+          dos2unix main.tex || true
+          dos2unix report/inputs.tex || true
+
+      - name: Compile Beamer PDF (XeLaTeX, from repo root)
         uses: xu-cheng/latex-action@v3
         with:
-          # We compile from REPO ROOT (no working_directory)
           root_file: main.tex
           latexmk_use_xelatex: true
+          # sanity check inside the container before compiling
+          pre_compile: |
+            echo "Container sees:"
+            ls -lah
+            echo "Container sees report/:"
+            ls -lah report || true
+            echo "kpsewhich report/inputs.tex ->"
+            kpsewhich report/inputs.tex || true
 
       - name: Upload PDF
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-forecast-report
-          path: main.pdf   # emitted in repo root when compiling main.tex in root
+          path: main.pdf
 
       - name: Upload outputs (PNGs/JSON/CSVs)
         uses: actions/upload-artifact@v4
@@ -88,24 +100,18 @@ jobs:
         shell: bash
         run: |
           set -eo pipefail
-
           url="${OVERLEAF_URL}"
           echo "::add-mask::$url"
-
           tmp="$(mktemp -d)"
           git clone --depth 1 "$url" "$tmp/overleaf"
-
           rsync -a --delete --exclude ".git" report/ "$tmp/overleaf/"
-
           cd "$tmp/overleaf"
           git config user.name "GitHub Actions"
           git config user.email "actions@users.noreply.github.com"
-
           if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
             echo "No changes to publish."
             exit 0
           fi
-
           git add -A
           ts=$(date -u +%Y-%m-%dT%H:%MZ)
           git commit -m "Auto-publish ${ts}"
