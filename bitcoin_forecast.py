@@ -61,40 +61,59 @@ def usd(x):
 
 # -------------------- 1) HEADLINES --------------------
 import requests, certifi, feedparser
+from urllib.parse import urlparse
 from gnews import GNews
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
-SCRAPE_DAYS = 60
-QUERY_TOPIC = "Bitcoin"
+SCRAPE_DAYS   = int(os.getenv("SCRAPE_DAYS", "60"))
+QUERY_TOPIC   = os.getenv("QUERY_TOPIC", "Bitcoin")
+USE_GNEWS     = os.getenv("USE_GNEWS", "true").lower() == "true"
+USE_REDDIT    = os.getenv("USE_REDDIT", "true").lower() == "true"
+USE_RSS       = os.getenv("USE_RSS", "true").lower() == "true"
+USE_GDELT     = os.getenv("USE_GDELT", "true").lower() == "true"
 
+# Optional: tweak how many items we try per feed
+MAX_PER_FEED  = int(os.getenv("MAX_PER_FEED", "400"))
 
+# --- helper ---
 def _to_utc(ts):
+    try:    return pd.to_datetime(ts, utc=True)
+    except: return pd.Timestamp.utcnow()
+
+def _host(u):
     try:
-        return pd.to_datetime(ts, utc=True)
+        return urlparse(u).netloc.lower()
     except Exception:
-        return pd.Timestamp.utcnow()
+        return ""
 
-
+# --- Google News (no key) ---
 def get_google_news(topic=QUERY_TOPIC, max_results=400):
+    if not USE_GNEWS:
+        return pd.DataFrame(columns=["date","text","source","url"])
     try:
         g = GNews(language="en", max_results=max_results)
         arts = g.get_news(topic)
         rows = []
         for a in arts:
-            dt = a.get("published date") or a.get("publishedDate") or datetime.utcnow()
+            dt    = a.get("published date") or a.get("publishedDate") or datetime.utcnow()
             title = a.get("title") or ""
-            desc = a.get("description") or a.get("summary") or ""
-            rows.append({"date": _to_utc(dt), "text": f"{title}. {desc}".strip(), "source": "google_news"})
+            desc  = a.get("description") or a.get("summary") or ""
+            link  = a.get("url") or ""
+            txt   = f"{title}. {desc}".strip()
+            if txt:
+                rows.append({"date": _to_utc(dt), "text": txt, "source": "google_news", "url": link})
         print(f"[google_news] {len(rows)} items")
         return pd.DataFrame(rows)
     except Exception as e:
         print("[google_news] failed ->", e)
-        return pd.DataFrame(columns=["date", "text", "source"])
+        return pd.DataFrame(columns=["date","text","source","url"])
 
-
-def get_reddit_rss(subreddits=("Bitcoin", "CryptoCurrency", "BitcoinMarkets", "CryptoMarkets"),
+# --- Reddit RSS (no key) ---
+def get_reddit_rss(subreddits=("Bitcoin","CryptoCurrency","BitcoinMarkets","CryptoMarkets"),
                    days=SCRAPE_DAYS, max_per_sub=300):
+    if not USE_REDDIT:
+        return pd.DataFrame(columns=["date","text","source","url"])
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     rows = []
     for sub in subreddits:
@@ -103,40 +122,110 @@ def get_reddit_rss(subreddits=("Bitcoin", "CryptoCurrency", "BitcoinMarkets", "C
             feed = feedparser.parse(url)
             cnt = 0
             for e in feed.entries:
-                if cnt >= max_per_sub:
-                    break
-                dt = _to_utc(getattr(e, "published", getattr(e, "updated", datetime.utcnow())))
-                if dt < cutoff:
-                    continue
-                title = getattr(e, "title", "")
+                if cnt >= max_per_sub: break
+                dt  = _to_utc(getattr(e, "published", getattr(e, "updated", datetime.utcnow())))
+                if dt < cutoff: continue
+                title   = getattr(e, "title", "")
                 summary = getattr(e, "summary", "")
+                link    = getattr(e, "link", "")
                 txt = f"{title}. {summary}".strip()
-                if len(txt) < 6:
-                    continue
-                rows.append({"date": dt, "text": txt, "source": f"reddit/r/{sub}"})
+                if len(txt) < 6: continue
+                rows.append({"date": dt, "text": txt, "source": f"reddit/r/{sub}", "url": link})
                 cnt += 1
             print(f"[reddit:r/{sub}] {cnt} items")
         except Exception as ex:
             print(f"[reddit:r/{sub}] failed -> {ex}")
     return pd.DataFrame(rows)
 
+# --- Generic RSS packs (FT/NYT headlines + crypto outlets etc.) ---
+NEWS_RSS = {
+    # Big papers (headlines/snippets via RSS – no paywalled full text)
+    "nyt_business": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+    "nyt_markets":  "https://rss.nytimes.com/services/xml/rss/nyt/YourMoney.xml",
+    "ft_markets":   "https://www.ft.com/markets?format=rss",
+    "ft_companies": "https://www.ft.com/companies?format=rss",
+    # Crypto/finance outlets
+    "reuters_crypto":  "https://www.reuters.com/markets/cryptocurrency/rss",
+    "coindesk":        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "cointelegraph":   "https://cointelegraph.com/rss",
+    "cnbc_crypto":     "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+    "yahoo_crypto":    "https://finance.yahoo.com/topic/crypto/rss",
+}
 
+def get_rss_many(feeds=NEWS_RSS, days=SCRAPE_DAYS, max_per_feed=MAX_PER_FEED):
+    if not USE_RSS:
+        return pd.DataFrame(columns=["date","text","source","url"])
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = []
+    for name, url in feeds.items():
+        try:
+            f = feedparser.parse(url)
+            cnt = 0
+            for e in f.entries:
+                if cnt >= max_per_feed: break
+                dt  = _to_utc(getattr(e, "published", getattr(e, "updated", datetime.utcnow())))
+                if dt < cutoff: continue
+                title   = getattr(e, "title", "")
+                summary = getattr(e, "summary", "")
+                link    = getattr(e, "link", "")
+                txt = f"{title}. {summary}".strip()
+                if len(txt) < 6: continue
+                rows.append({"date": dt, "text": txt, "source": f"rss/{name}", "url": link})
+                cnt += 1
+            print(f"[rss:{name}] {cnt} items")
+        except Exception as ex:
+            print(f"[rss:{name}] failed -> {ex}")
+    return pd.DataFrame(rows)
+
+# --- GDELT (broad, free, no key) ---
+def get_gdelt(q="bitcoin OR btc", days=SCRAPE_DAYS):
+    if not USE_GDELT:
+        return pd.DataFrame(columns=["date","text","source","url"])
+    try:
+        base = "https://api.gdeltproject.org/api/v2/doc/doc"
+        params = {"query": q, "mode":"ArtList", "format":"JSON",
+                  "maxrecords": 250, "timespan": f"{int(days)}d"}
+        r = requests.get(base, params=params, timeout=30)
+        arts = (r.json().get("articles") or []) if r.status_code == 200 else []
+        rows=[]
+        for a in arts:
+            dt  = _to_utc(a.get("seendate"))
+            ttl = a.get("title","")
+            src = a.get("sourceCommonName","")
+            url = a.get("url","")
+            txt = f"{ttl}. {src}".strip()
+            if txt:
+                rows.append({"date": dt, "text": txt, "source": "gdelt", "url": url})
+        print(f"[gdelt] {len(rows)} items")
+        return pd.DataFrame(rows)
+    except Exception as e:
+        print("[gdelt] failed ->", e)
+        return pd.DataFrame(columns=["date","text","source","url"])
+
+# ---- Pull everything (all optional via flags) ----
 frames = []
-gn = get_google_news()
-rd = get_reddit_rss()
-for df_ in (gn, rd):
-    if not df_.empty:
-        frames.append(df_)
+for fn in (get_google_news, get_reddit_rss, get_rss_many, get_gdelt):
+    try:
+        df_ = fn()
+        if df_ is not None and not df_.empty:
+            frames.append(df_)
+    except Exception as e:
+        print(f"[collector:{fn.__name__}] failed -> {e}")
 
 if not frames:
-    raise RuntimeError("No headlines collected (Google News + Reddit both empty).")
+    raise RuntimeError("No headlines collected (try enabling RSS/GDELT or widening SCRAPE_DAYS).")
 
-df_posts = (
-    pd.concat(frames, ignore_index=True)
-      .drop_duplicates(subset=["text"])
-      .sort_values("date")
-      .reset_index(drop=True)
-)
+# Stronger de-dup: prefer (host + title) when we have URLs, else text
+raw = pd.concat(frames, ignore_index=True)
+raw["url_host"] = raw["url"].fillna("").map(_host)
+dedup_cols = np.where(raw["url"].notna() & raw["url"].ne(""),
+                      ["url_host","text"], ["text"])
+# simple path: drop duplicates by (url_host, text) when url exists
+df_posts = (raw.drop_duplicates(subset=["url_host","text"])
+               .drop(columns=["url_host"])
+               .sort_values("date")
+               .reset_index(drop=True))
+print(f"[collect] total={len(raw)} unique={len(df_posts)}")
 
 # -------------------- 2) SENTIMENT (FinBERT, VADER fallback) --------------------
 USE_FINBERT = os.getenv("USE_FINBERT", "false").lower() == "true"
